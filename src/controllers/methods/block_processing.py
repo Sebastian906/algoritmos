@@ -8,7 +8,7 @@ class BlockProcessingStrategy:
     """
     Estrategia de procesamiento por bloques para manejar grandes espacios de estados.
     """
-    def __init__(self, tamaño_bloque=1000):
+    def __init__(self, tamaño_bloque=5):
         """
         Inicializa la estrategia de procesamiento por bloques.
         
@@ -43,7 +43,20 @@ class BlockProcessingStrategy:
         Returns:
             List[Any]: Resultados del procesamiento de cada estado en el bloque
         """
-        return [funcion_procesamiento(estado) for estado in bloque]
+
+
+        return [funcion_procesamiento(self.convertir_a_tupla(estado)) for estado in bloque]
+    def convertir_a_tupla(self, estado: np.ndarray) -> tuple:
+        """
+        Convierte un estado de numpy array a una tupla.
+        
+        Args:
+            estado (np.ndarray): Estado representado como un array de numpy
+        
+        Returns:
+            tuple: Estado convertido en una tupla
+        """
+        return tuple(map(int, estado))
 
     def aplicar_estrategia(
         self, 

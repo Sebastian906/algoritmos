@@ -27,15 +27,15 @@ from src.controllers.methods.memory_reduction import MemoryReductionStrategy
 
 class SIA(ABC):
     """
-    La clase SIA es la encargada de albergar como madre todos los diferentes algoritmos desarrollados, planteando la base de la que con el método `preparar_subsistema` se obtendrá uno con características indicadas por el usuario.
+    La clase SIA es la encargada de albergar como madre todos los diferentes algoritmos desarrollados, planteando la base de la que con el método preparar_subsistema se obtendrá uno con características indicadas por el usuario.
 
     Args:
     ----
-        - config (Loader): El cargador de la data desde las muestras con las matrices, es relevante recordar que este tiene el estado inicial como cadena, por lo que es crucial su transoformación a `np.array(...)` para capacidad de indexar datos.
-        - `sia_debug_observer` (DebugObserver): Debugger que no afecte el rendimiento de la ejecución para un sistema.
-        - `sia_logger` (Logger): Imprime datos de la ejecución en `logs/<fecha>/<hora>/` asociando una hora específica por cada fecha del año, allí agrupa el resultado de la ejecución de los distintos loggers situados en aplicativo. De esta forma por hora se almacenará el último resultado de la ejecución.
-        - `sia_subsistema` (System): El subsistema resultante de la preparación, es almacenado para tener una copia reutilizable en el proceso de particionamiento.
-        - `sia_dists_marginales` (np.ndarray): Igualmente, una copia con fines de reutilización durante cálculos con la EMD.
+        - config (Loader): El cargador de la data desde las muestras con las matrices, es relevante recordar que este tiene el estado inicial como cadena, por lo que es crucial su transoformación a np.array(...) para capacidad de indexar datos.
+        - sia_debug_observer (DebugObserver): Debugger que no afecte el rendimiento de la ejecución para un sistema.
+        - sia_logger (Logger): Imprime datos de la ejecución en logs/<fecha>/<hora>/ asociando una hora específica por cada fecha del año, allí agrupa el resultado de la ejecución de los distintos loggers situados en aplicativo. De esta forma por hora se almacenará el último resultado de la ejecución.
+        - sia_subsistema (System): El subsistema resultante de la preparación, es almacenado para tener una copia reutilizable en el proceso de particionamiento.
+        - sia_dists_marginales (np.ndarray): Igualmente, una copia con fines de reutilización durante cálculos con la EMD.
     """
 
     def __init__(
@@ -68,7 +68,7 @@ class SIA(ABC):
     def sia_cargar_tpm(self) -> np.ndarray:
         """Carga TPM desde archivo con estrategia de representación compacta"""
         tpm_original = np.genfromtxt(self.sia_gestor.tpm_filename, delimiter=COLON_DELIM)
-        return self.estrategia_representacion.aplicar_estrategia(tpm_original)
+        return tpm_original
 
     def sia_preparar_subsistema(
         self,
@@ -80,12 +80,12 @@ class SIA(ABC):
         """Es en este método donde dada la entrada del usuario, vamos a generar un sistema completo, aplicamos condiciones de fondo (background conditions), loe substraemos partes para dejar un subsistema y es este el que retornamos pues este es el mínimo "sistema" útil para poder encontrar la bipartición que le genere la menor pérdida.
 
         Args:
-            - `condicion` (str): Cadena de bits donde los bits en cero serán las dimensiones a condicionar.
-            - `alcance` (str): Cadena de bits donde los bits en cero serán las dimensiones a substraer del alcance .
-            - `mecanismo` (str): Cadena de bits donde los bits en cero serán las dimensiones a substraer del mecanismo.
+            - condicion (str): Cadena de bits donde los bits en cero serán las dimensiones a condicionar.
+            - alcance (str): Cadena de bits donde los bits en cero serán las dimensiones a substraer del alcance .
+            - mecanismo (str): Cadena de bits donde los bits en cero serán las dimensiones a substraer del mecanismo.
 
         Raises:
-            - `Exception:` Es crucial que todos tengan el mismo tamaño del estado inicial para correctamente identificar los índices y valor de cada variable rápidamente.
+            - Exception: Es crucial que todos tengan el mismo tamaño del estado inicial para correctamente identificar los índices y valor de cada variable rápidamente.
         
         Preparar subsistema con estrategias de gestión de memoria.
 
@@ -144,9 +144,9 @@ class SIA(ABC):
         """Valida que los datos enviados por el usuario sean correctos, donde no hay problema si tienen la misma longitud puesto se están asignando los valores correspondientes a cada variable.
 
         Args:
-            `candidato` (str): Cadena de texto que representa la presencia o ausencia de un conjunto de variables que serán enviadas para condicionar el sistema original dejándolo como un Sistema candidato, si su bit asociado equivale a 0 se condiciona la variable, si equivale a 1 esta variable se mantendrá en el sistema durante toda la ejecución (hasta que un subsistema la marginalice).
-            `futuro` (str): Cadena de texto que representa la presencia o ausencia de un conjunto de variables que serán enviadas para substraer en el alcance del Sistema candidato dejándo un Subsistema, si su bit asociado equivale a 0 la variable será marginalizada, si equivale a 1 la variable se mantendrá en el Sistema candidato durante toda la ejecución (hasta que una partición la marginalice).
-            `presente` (str): Cadena de texto que representa la presencia o ausencia de un conjunto de variables que serán enviadas para substraer en el mecanismo del Sistema candidato dejándolo como un Subsistema, si su bit asociado equivale a 0 la variable será marginalizada, si equivale a 1 la variable se mantendrá en el Sistema candidato durante toda la ejecución (hasta que una partición la marginalice).
+            candidato (str): Cadena de texto que representa la presencia o ausencia de un conjunto de variables que serán enviadas para condicionar el sistema original dejándolo como un Sistema candidato, si su bit asociado equivale a 0 se condiciona la variable, si equivale a 1 esta variable se mantendrá en el sistema durante toda la ejecución (hasta que un subsistema la marginalice).
+            futuro (str): Cadena de texto que representa la presencia o ausencia de un conjunto de variables que serán enviadas para substraer en el alcance del Sistema candidato dejándo un Subsistema, si su bit asociado equivale a 0 la variable será marginalizada, si equivale a 1 la variable se mantendrá en el Sistema candidato durante toda la ejecución (hasta que una partición la marginalice).
+            presente (str): Cadena de texto que representa la presencia o ausencia de un conjunto de variables que serán enviadas para substraer en el mecanismo del Sistema candidato dejándolo como un Subsistema, si su bit asociado equivale a 0 la variable será marginalizada, si equivale a 1 la variable se mantendrá en el Sistema candidato durante toda la ejecución (hasta que una partición la marginalice).
 
         Returns:
             bool: True si las dimensiones son diferentes, de otra forma los parámetros enviados son válidos (y depende si existe la red asociada).

@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import time
 import os
-
 import numpy as np
 
 from src.models.base.application import aplicacion
@@ -14,7 +13,7 @@ from src.constants.base import (
     RESOLVER_PATH,
 )
 
-# Importar las nuevas metodolodías de memoría 
+# Importar estrategias
 from src.controllers.methods.compact_representation import CompactRepresentationStrategy
 from src.controllers.methods.block_processing import BlockProcessingStrategy
 from src.controllers.methods.parallelization import ParallelizationStrategy
@@ -23,71 +22,35 @@ from src.controllers.methods.memory_reduction import MemoryReductionStrategy
 @dataclass
 class Manager:
     """
-    El gestor es el encargado de en función al tamaño del estado inicial y la página asociada traer el fichero de formato CSV con las TPM's almacenadas en `.samples/` para hacer una rápida depuración de los datos para la creación de sistemas.
-
-    Args:
-    ----
-        - `estado_inicial` (str): Dado se manejan sistemas binarios es un número base dos de tamaño asociado a la red que se quiera cargar.
-        - `pagina` (str): En la ruta de samples se tiene un literal asociado al tamaño de las redes por si se necesita añadir varias de un mismo tamaño.
-        ruta_base (Path): Ruta donde se encuentran las muestras de TPMs en representación estado-nodo-on (TPM estado-nodo simplificada).
-
-    Returns:
-    -------
-        Manager: Así mismo se encarga de asociar el directorio donde se mostrarán análisis de las ejecuciones, donde sea el programador haga uso del módulo de logging y profilling.
+    Clase para gestionar redes y configuraciones de procesamiento.
     """
 
     estado_inicial: str
     ruta_base: Path = Path(SAMPLES_PATH)
 
-    # Estrategias de gestión de memoria con valores por defecto
-    estrategia_representacion: CompactRepresentationStrategy = field(
-        default_factory=CompactRepresentationStrategy
-    )
-    estrategia_bloques: BlockProcessingStrategy = field(
-        default_factory=BlockProcessingStrategy
-    )
-    estrategia_paralelizacion: ParallelizationStrategy = field(
-        default_factory=ParallelizationStrategy
-    )
-    estrategia_reduccion: MemoryReductionStrategy = field(
-        default_factory=MemoryReductionStrategy
-    )
+    # Diccionario que almacena las estrategias de optimización
+    estrategias: dict = field(default_factory=dict)
 
-    '''
-    def get_sia_parameters(self):
-        """Provee los parámetros necesarios para SIA sin crear dependencia"""
-        return {
-            'estado_inicial': self.estado_inicial,
-            'tpm_filename': str(self.tpm_filename),
-            'output_dir': str(self.output_dir)
-        }'
-    '''
-
-    def preparar_estrategias(
-        self, 
-        estrategias: dict = None
-    ):
+    def __post_init__(self):
         """
-        Método para configurar estrategias de gestión de memoria.
+        Inicializa el diccionario de estrategias con valores por defecto.
+        """
+        self.estrategias = {
+            'representacion': CompactRepresentationStrategy(),
+            'bloques': BlockProcessingStrategy(),
+            'paralelizacion': ParallelizationStrategy(),
+            'reduccion': MemoryReductionStrategy()
+        }
+
+    def preparar_estrategias(self, estrategias: dict = None):
+        """
+        Configura estrategias de gestión de memoria.
         
         Args:
-            estrategias (dict, optional): Diccionario con estrategias personalizadas. 
-                Claves posibles: 'representacion', 'bloques', 'paralelizacion', 'reduccion'
+            estrategias (dict, optional): Diccionario con estrategias personalizadas.
         """
-        if estrategias is None:
-            return
-
-        if 'representacion' in estrategias:
-            self.estrategia_representacion = estrategias['representacion']
-        
-        if 'bloques' in estrategias:
-            self.estrategia_bloques = estrategias['bloques']
-        
-        if 'paralelizacion' in estrategias:
-            self.estrategia_paralelizacion = estrategias['paralelizacion']
-        
-        if 'reduccion' in estrategias:
-            self.estrategia_reduccion = estrategias['reduccion']
+        if estrategias:
+            self.estrategias.update(estrategias)
 
     @property
     def pagina(self) -> str:
@@ -95,37 +58,22 @@ class Manager:
 
     @property
     def tpm_filename(self) -> Path:
-        return (
-            self.ruta_base / f"N{len(self.estado_inicial)}{self.pagina}.{CSV_EXTENSION}"
-        )
+        return self.ruta_base / f"N{len(self.estado_inicial)}{self.pagina}.{CSV_EXTENSION}"
 
     @property
     def output_dir(self) -> Path:
-        return Path(
-            f"{RESOLVER_PATH}/N{len(self.estado_inicial)}{self.pagina}/{self.estado_inicial}"
-        )
+        return Path(f"{RESOLVER_PATH}/N{len(self.estado_inicial)}{self.pagina}/{self.estado_inicial}")
 
     def generar_red(self, dimensiones: int, datos_discretos: bool = True) -> str:
         """
-        Se encarga de generar una red (TPM) en notación little endian para un sistema determinista o no determinista (esto en función a si contiene datos discretos o no respectivamente. Nunca confundir con un "Sistema continuo" puesto apela a otra definición totalmente diferente).
-        La red generada s almacenará en el "output_dir", un atributo dinámico en función a que si generaste una red de un tamaño X por primera vez, estará etiquetada como "A", si deseas generar otra red del mismo tamaño naturalmente contendrá los mismos datos puesto están determinados por la semilla numpy, de forma que la forma de obtener otra red diferente es actuando sobre el parámetro `datos_discretos`, siendo estas dos redes distintas en su contenido.
-
-        Args:
-            dimensiones (int): Número de nodos/elementos/variables/canales que se desea maneje la red, obteniendo un Sistema que para cada estado en $(t)$ tendrá un canalen $(t+1)$.
-            datos_discretos (bool, optional): Selecciona si se quiere que la red generada sea no determinista, con el valor de probabilidad como siempre, un real positivo entre 0 y 1 inclusivo. Por defecto es True.
-
-        Raises:
-            ValueError: _description_
-
-        Returns:
-            str: _description_
+        Genera una red de estados (TPM) y la guarda en un archivo.
         """
         np.random.seed(aplicacion.semilla_numpy)
 
         if dimensiones < 1:
             raise ValueError("Las dimensiones deben ser positivas")
 
-        # Calcular tamaño y tiempo estimado
+        # Cálculo del tamaño y tiempo estimado
         num_estados = 1 << dimensiones
         total_size_gb = (num_estados * dimensiones) / (1024**3)
         estimated_time = total_size_gb * 2
@@ -134,24 +82,16 @@ class Manager:
         print(f"Tiempo estimado: {estimated_time:.1f} segundos")
 
         if total_size_gb > 1:
-            if (
-                input("El sistema ocupará más de 1GB. ¿Continuar? (s/n): ").lower()
-                != "s"
-            ):
+            if input("El sistema ocupará más de 1GB. ¿Continuar? (s/n): ").lower() != "s":
                 return None
 
-        # Verificar archivos existentes y generar nuevo nombre
+        # Verificar existencia de archivos y generar nuevo nombre
         base_path = Path(SAMPLES_PATH)
         base_path.mkdir(parents=True, exist_ok=True)
 
         suffix = ABC_START
         while (base_path / f"N{dimensiones}{suffix}.{CSV_EXTENSION}").exists():
-            if (
-                input(
-                    f"Ya existe N{dimensiones}{suffix}.{CSV_EXTENSION}. ¿Generar nueva red? (s/n): "
-                ).lower()
-                != "s"
-            ):
+            if input(f"Ya existe N{dimensiones}{suffix}.{CSV_EXTENSION}. ¿Generar nueva red? (s/n): ").lower() != "s":
                 return f"N{dimensiones}{suffix}.{CSV_EXTENSION}"
             suffix = chr(ord(suffix) + 1)
 
@@ -163,9 +103,7 @@ class Manager:
         start_time = time.time()
 
         if datos_discretos:
-            states = np.random.randint(
-                2, size=(num_estados, dimensiones), dtype=np.int8
-            )
+            states = np.random.randint(2, size=(num_estados, dimensiones), dtype=np.int8)
         else:
             states = np.random.random(size=(num_estados, dimensiones))
 
@@ -174,9 +112,7 @@ class Manager:
         # Guardar archivo
         print(f"Guardando en {filepath}...")
         start_time = time.time()
-        np.savetxt(
-            filepath, states, delimiter=COLON_DELIM, fmt="%d" if datos_discretos else "%.6f"
-        )
+        np.savetxt(filepath, states, delimiter=COLON_DELIM, fmt="%d" if datos_discretos else "%.6f")
 
         file_size_gb = os.path.getsize(filepath) / (1024**3)
         print(f"Archivo guardado: {file_size_gb:.6f} GB")
