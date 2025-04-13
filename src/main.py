@@ -1,72 +1,40 @@
 import pandas as pd
 import multiprocessing
-from src.controllers.strategies.phi import Phi
+from src.controllers.strategies.nodos_q import NodesQ
 from src.controllers.manager import Manager
-from src.controllers.methods.memory_reduction import MemoryReductionStrategy
-from src.controllers.methods.block_processing import BlockProcessingStrategy
-from src.controllers.methods.parallelization import ParallelizationStrategy
-from src.controllers.methods.compact_representation import CompactRepresentationStrategy
-
-# Configuración de estrategias individuales
-ESTRATEGIAS_MEMORIA = {
-    'reduccion': lambda: MemoryReductionStrategy(porcentaje=0.2),
-    'bloques': lambda: BlockProcessingStrategy(tamaño_bloque=500.0),
-    'paralelizacion': lambda: ParallelizationStrategy(num_procesos=4.0),
-    'compresion': lambda: CompactRepresentationStrategy()
-}
-
-# Seleccionar estrategia (modifica aquí la estrategia deseada)
-estrategia_seleccionada = 'bloques'  # Opciones: 'reduccion', 'bloques', 'paralelizacion'
 
 # Lista de caracteres base
-CARACTERES_BASE = "ABCDEFGHIJ"
+CARACTERES_BASE = "ABCDEFGHIJKLMNOPQRST" #cambiar por la cantidad de nodos que hay cada nodo expresa por un numero 
 
 def procesar_cadena(cadena):
     try:
+        # Separar la cadena en las dos partes (antes y después del "|")
         parte_t1, parte_t = cadena.split("|")
+
+        # Eliminar la parte "{t+1}" y "{t}"
         parte_t1 = parte_t1.replace("_{t+1}", "")
         parte_t = parte_t.replace("_{t}", "")
+        #print(parte_t1, parte_t, sep="\t") linea pos si quieres ver que subsistema se esta haciendo 
+
+        # Crear las cadenas alcance y mecanismo basadas en la presencia de los caracteres
         alcance = "".join("1" if c in parte_t1 else "0" for c in CARACTERES_BASE)
         mecanismo = "".join("1" if c in parte_t else "0" for c in CARACTERES_BASE)
+
         return alcance, mecanismo
     except Exception as e:
         print(f"Error procesando la cadena: {cadena}, Error: {e}")
         return None, None
 
 def ejecutar_proceso(resultado_queue, condiciones, alcance, mecanismo):
-    estado_inicio = "1000000000"
+    estado_inicio = "10000000000000000000"#agrega los ceros necesarios para la cantidad de nodos que vayas a utilizar 
     config_sistema = Manager(estado_inicial=estado_inicio)
-    
-    # Aplicar solo la estrategia seleccionada
-    estrategia = ESTRATEGIAS_MEMORIA[estrategia_seleccionada]()
-    valorestrategia = None
-    if estrategia_seleccionada == 'reduccion':
-        valorestrategia = estrategia.porcentaje
-    elif estrategia_seleccionada == 'bloques':
-        valorestrategia = estrategia.tamaño_bloque
-    elif estrategia_seleccionada == 'paralelizacion':
-        valorestrategia = estrategia.num_procesos
-    else:
-        valorestrategia=None
-
-    config_sistema.preparar_estrategias({estrategia_seleccionada: estrategia})
-    
-    analizador_fb = Phi(config_sistema)
-    resultado = analizador_fb.aplicar_estrategia(
-        condiciones, 
-        alcance, 
-        mecanismo,
-        estrategia_muestreo=valorestrategia,
-        estrategia = estrategia
-    )
+    analizador_fb = NodesQ(config_sistema)
+    resultado = analizador_fb.aplicar_estrategia(condiciones, alcance, mecanismo)
     resultado_queue.put(resultado)
 
-def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600):
+def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600): #altera el timeout a la cantidad de segunos que quieras esperar que se ejecute el subsistema 
     resultado_queue = multiprocessing.Queue()
-    proceso = multiprocessing.Process(
-        target=ejecutar_proceso, 
-        args=(resultado_queue, condiciones, alcance, mecanismo)
-    )
+    proceso = multiprocessing.Process(target=ejecutar_proceso, args=(resultado_queue, condiciones, alcance, mecanismo))
     proceso.start()
     
     proceso.join(timeout)
@@ -86,12 +54,13 @@ def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600):
     return None
 
 def iniciar(alcance, mecanismo):
-    condiciones = "1111111111"
+    condiciones = "11111111111111111111"#agrega los 1 necesarios para la cantidad de nodos que vayas a utilizar 
     return ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo)
 
 def leer_columna_excel(ruta_archivo, nombre_columna):
     try:
         df = pd.read_excel(ruta_archivo, engine='openpyxl')
+
         if nombre_columna not in df.columns:
             print(f"Error: La columna '{nombre_columna}' no existe en el archivo.")
             return
@@ -104,7 +73,7 @@ def leer_columna_excel(ruta_archivo, nombre_columna):
                 if resultado is not None:
                     print(resultado.perdida, resultado.tiempo_ejecucion, sep="\t")
                 else:
-                    print("Tiempo excedido (60 minutos). Terminando proceso...")
+                    print("Tiempo excedido (60 minuto). Terminando proceso...")
     except Exception as e:
         print(f"Error al leer el archivo: {e}")
 
