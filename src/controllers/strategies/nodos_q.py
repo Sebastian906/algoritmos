@@ -111,7 +111,7 @@ class NodesQ(SIA):
         # Obtener el complemento y formatear la solución
         complement = self.nodes_complement(mip_list)
         fmt_mip = fmt_biparte_q(mip_list, complement)
-
+        print(f"{fmt_mip}")
         return Solution(
             estrategia=QNODES_LABEL,
             perdida=self.memoria_particiones[mip][0],
