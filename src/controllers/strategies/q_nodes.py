@@ -249,15 +249,19 @@ class QNodes(SIA):
                 omegas_ciclo.append(deltas_ciclo[indice_mip])
                 deltas_ciclo.pop(indice_mip)
                 ...
+            # Guardar partición candidata
+            clave_particion = tuple(
+                deltas_ciclo[LAST_IDX]
+                if isinstance(deltas_ciclo[LAST_IDX], list)
+                else deltas_ciclo
+            )
+            self.memoria_particiones[clave_particion] = emd_particion_candidata, dist_particion_candidata
 
-            self.memoria_particiones[
-                tuple(
-                    deltas_ciclo[LAST_IDX]
-                    if isinstance(deltas_ciclo[LAST_IDX], list)
-                    else deltas_ciclo
-                )
-            ] = emd_particion_candidata, dist_particion_candidata
+            # Verificación de pérdida cero
+            if emd_particion_candidata == 0.0:
+                return clave_particion
 
+            # Generar par candidato y continuar
             par_candidato = (
                 [omegas_ciclo[LAST_IDX]]
                 if isinstance(omegas_ciclo[LAST_IDX], tuple)
