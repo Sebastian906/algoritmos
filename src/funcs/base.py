@@ -82,7 +82,11 @@ def emd_causal(u: NDArray[np.float64], v: NDArray[np.float64]) -> float:
 
 
 def hamming_distance(a: int, b: int) -> int:
-    return (a ^ b).bit_count()
+    return count_bits(a ^ b)
+
+
+def count_bits(n: int) -> int:
+    return bin(n).count("1")
 
 
 def reindexar(N: int):

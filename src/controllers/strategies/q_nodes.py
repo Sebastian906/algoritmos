@@ -126,11 +126,14 @@ class QNodes(SIA):
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
         futuro = tuple(
-            (EFECTO, efecto) for efecto in self.sia_subsistema.indices_ncubos
+            (EFECTO, idx_efecto) for idx_efecto in self.sia_subsistema.indices_ncubos
         )
+        # ( (1,0)=A (1,1)=B (1,2)=C #
+
         presente = tuple(
-            (ACTUAL, actual) for actual in self.sia_subsistema.dims_ncubos
+            (ACTUAL, idx_actual) for idx_actual in self.sia_subsistema.dims_ncubos
         )  #
+        # ( (0,0)=a (0,1)=b (0,2)=c #
 
         self.m = self.sia_subsistema.indices_ncubos.size
         self.n = self.sia_subsistema.dims_ncubos.size
