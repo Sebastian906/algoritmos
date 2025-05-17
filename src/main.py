@@ -1,38 +1,31 @@
 import pandas as pd
 import multiprocessing
-from src.controllers.strategies.nodos_q import NodesQ
+from src.controllers.strategies.geometrica import GeometricSIA  # Cambio aquí
 from src.controllers.manager import Manager
 
 # Lista de caracteres base
-CARACTERES_BASE = "ABCDEFGHIJKLMNOPQRST" #cambiar por la cantidad de nodos que hay cada nodo expresa por un numero 
+CARACTERES_BASE = "ABCDEFGHIJ"  # Asegúrate de que coincida con el número de nodos
 
 def procesar_cadena(cadena):
     try:
-        # Separar la cadena en las dos partes (antes y después del "|")
         parte_t1, parte_t = cadena.split("|")
-
-        # Eliminar la parte "{t+1}" y "{t}"
         parte_t1 = parte_t1.replace("_{t+1}", "")
         parte_t = parte_t.replace("_{t}", "")
-        #print(parte_t1, parte_t, sep="\t") linea pos si quieres ver que subsistema se esta haciendo 
-
-        # Crear las cadenas alcance y mecanismo basadas en la presencia de los caracteres
         alcance = "".join("1" if c in parte_t1 else "0" for c in CARACTERES_BASE)
         mecanismo = "".join("1" if c in parte_t else "0" for c in CARACTERES_BASE)
-
         return alcance, mecanismo
     except Exception as e:
         print(f"Error procesando la cadena: {cadena}, Error: {e}")
         return None, None
 
 def ejecutar_proceso(resultado_queue, condiciones, alcance, mecanismo):
-    estado_inicio = "10000000000000000000"#agrega los ceros necesarios para la cantidad de nodos que vayas a utilizar 
+    estado_inicio = "1000000000"  # Ajusta a la cantidad de nodos
     config_sistema = Manager(estado_inicial=estado_inicio)
-    analizador_fb = NodesQ(config_sistema)
-    resultado = analizador_fb.aplicar_estrategia(condiciones, alcance, mecanismo)
+    analizador = GeometricSIA(config_sistema)  # Cambio aquí
+    resultado = analizador.aplicar_estrategia(condiciones, alcance, mecanismo)
     resultado_queue.put(resultado)
 
-def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600): #altera el timeout a la cantidad de segunos que quieras esperar que se ejecute el subsistema 
+def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600):
     resultado_queue = multiprocessing.Queue()
     proceso = multiprocessing.Process(target=ejecutar_proceso, args=(resultado_queue, condiciones, alcance, mecanismo))
     proceso.start()
@@ -54,7 +47,7 @@ def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600): #
     return None
 
 def iniciar(alcance, mecanismo):
-    condiciones = "11111111111111111111"#agrega los 1 necesarios para la cantidad de nodos que vayas a utilizar 
+    condiciones = "1111111111"  # Ajusta a la cantidad de nodos
     return ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo)
 
 def leer_columna_excel(ruta_archivo, nombre_columna):
@@ -73,11 +66,11 @@ def leer_columna_excel(ruta_archivo, nombre_columna):
                 if resultado is not None:
                     print(resultado.perdida, resultado.tiempo_ejecucion, sep="\t")
                 else:
-                    print("Tiempo excedido (60 minuto). Terminando proceso...")
+                    print("Tiempo excedido (60 minutos). Terminando proceso...")
     except Exception as e:
         print(f"Error al leer el archivo: {e}")
 
 if __name__ == "__main__":
-    ruta_excel = "C:\\Users\\usuario\\Downloads\\Prueba aotomatizador.xlsx"
+    ruta_excel = "C:\\Users\\mauri\\Downloads\\Prueba aotomatizador.xlsx"
     nombre_columna = "Prueba aotomatizador"
     leer_columna_excel(ruta_excel, nombre_columna)

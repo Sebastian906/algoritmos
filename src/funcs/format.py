@@ -51,3 +51,40 @@ def fmt_parte_q(parte: list[tuple[int, int]], to_sort: bool = True) -> tuple[str
     width = max(len(str_purv), len(str_mech)) + 2
 
     return f"⎛{str_purv:^{width}}⎞", f"⎝{str_mech:^{width}}⎠"
+def fmt_biparte_geometrico(
+    grupo1: list[int],
+    grupo2: list[int],
+    to_sort: bool = True,
+) -> str:
+    """
+    Devuelve una representación visual de una bipartición simple (por índice).
+
+    Args:
+        grupo1 (list): Índices de la primera parte.
+        grupo2 (list): Índices de la segunda parte.
+        to_sort (bool): Si se deben ordenar los grupos antes de imprimir.
+
+    Returns:
+        str: Representación formateada como bipartición.
+    """
+    if to_sort:
+        grupo1 = sorted(grupo1)
+        grupo2 = sorted(grupo2)
+
+    def to_letras(grupo):
+        return ",".join(
+            ABECEDARY[i] if i < len(ABECEDARY) else f"x{i}"
+            for i in grupo
+        ) if grupo else VOID_STR
+
+    purv1 = to_letras(grupo1)
+    purv2 = to_letras(grupo2)
+
+    width_1 = max(len(purv1), 3)
+    width_2 = max(len(purv2), 3)
+
+    return (
+        f"⎛{purv1:^{width_1}}⎞⎛{purv2:^{width_2}}⎞\n"
+        f"⎝ {' '*width_1} ⎠⎝ {' '*width_2} ⎠"
+    )
+
