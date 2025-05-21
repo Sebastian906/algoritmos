@@ -271,3 +271,38 @@ class System:
             f"\nInitial state: {self.estado_inicial}"
             f"\nNCubes:\n" + "\n".join(cubes_info)
         )
+    def valor_estado(self, estado: int) -> float:
+        """
+        Dado un índice entero de estado binario, calcula el valor asociado al estado
+        en el sistema actual, combinando los valores de los n-cubos relevantes.
+
+        Args:
+            estado (int): Índice del estado binario.
+
+        Returns:
+            float: Valor promedio del estado en los n-cubos del sistema.
+        """
+        valores = []
+
+        # Para cada n-cubo en el sistema
+        for ncubo in self.ncubos:
+            if ncubo.dims.size == 0:
+                continue  # Saltar cubos sin dimensiones
+
+            # Convertir estado entero a binario del tamaño adecuado
+            bits = np.array(list(np.binary_repr(estado, width=ncubo.dims.size)), dtype=int)
+
+            # Convertir bits a índice (tupla) para acceder al dato en el n-cubo
+            idx = tuple(bits)
+
+            # Extraer el valor asociado a esa combinación
+            try:
+                valor = ncubo.data[idx]
+                valores.append(valor)
+            except IndexError:
+                # Si hay un error en la indexación (estado inválido), lo ignoramos
+                continue
+
+        # Devolver el promedio (o 0.0 si no hay datos válidos)
+        return float(np.mean(valores)) if valores else 0.0
+
