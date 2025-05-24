@@ -10,7 +10,7 @@ from src.constants.models import GEOMETRIC_LABEL, GEOMETRIC_ANALYSIS_TAG
 from src.constants.base import TYPE_TAG, NET_LABEL, INFTY_POS
 from src.middlewares.slogger import SafeLogger
 from src.middlewares.profile import profiler_manager, profile
-
+from scipy.stats import wasserstein_distance 
 
 class GeometricSIA(SIA):
     """
@@ -28,53 +28,55 @@ class GeometricSIA(SIA):
     @profile(context={TYPE_TAG: GEOMETRIC_ANALYSIS_TAG})
     def aplicar_estrategia(self, condicion, alcance, mecanismo):
         """
-        Método principal que ejecuta la estrategia geométrica:
-        1. Prepara el subsistema
-        2. Crea los hipercubos
-        3. Calcula la tabla de costos
-        4. Identifica candidatos a MIP
-        5. Evalúa y retorna la solución
+        Estrategia geométrica corregida: busca la bipartición óptima usando EMD.
         """
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
-        # Preparación de índices de cubos (variables del mecanismo y del alcance)
         self.indices_mecanismo = self.sia_subsistema.dims_ncubos
         self.indices_alcance = self.sia_subsistema.indices_ncubos
 
-        # Inicializa estructuras temporales para tiempos (opcional/diagnóstico)
-        self.tiempos = (
-            np.zeros(self.sia_subsistema.dims_ncubos.size, dtype=np.int8),
-            np.zeros(self.sia_subsistema.indices_ncubos.size, dtype=np.int8),
-        )
+        nodos = list(self.indices_mecanismo)
+        n = len(nodos)
+        mejores = None
+        mejor_perdida = float("inf")
 
-        # Construye cubos con combinaciones de tamaño 10
-        self._crear_ncubos(tamaño_cubo=2)
-        
+        # Genera todas las particiones no triviales del mecanismo
+        for k in range(1, n // 2 + 1):
+            for grupoA in combinations(nodos, k):
+                grupoB = tuple(set(nodos) - set(grupoA))
+                # Calcula la pérdida (EMD) para esta bipartición
+                perdida = self._calcular_perdida_biparticion(grupoA, grupoB)
+                if perdida < mejor_perdida:
+                    mejor_perdida = perdida
+                    mejores = grupoA
 
-        # Calcula la tabla de costos entre pares de estados
-        tabla_costos = self._calcular_tabla_costos()
-        #muestra de la tabla de costos (opcional/diagnóstico)
-
-        # Identifica candidatos con costo mínimo (idealmente 0)
-        candidatos = self._identificar_candidatos(tabla_costos)
-
-        # Evalúa y selecciona la mejor bipartición candidata
-        mip = self._evaluar_candidatos(candidatos, tabla_costos)
-        
-
-        # Formatea la solución para salida
         nodos_totales = len(self.indices_mecanismo) + len(self.indices_alcance)
-        nodos_complementarios = list(set(range(nodos_totales)) - set(mip[0]))
-        fmt_mip = fmt_biparte_geometrico(mip[0], nodos_complementarios)
+        nodos_complementarios = list(set(range(nodos_totales)) - set(mejores))
+        fmt_mip = fmt_biparte_geometrico(mejores, nodos_complementarios)
 
         return Solution(
             estrategia=GEOMETRIC_LABEL,
-            perdida=mip[0],
+            perdida=mejor_perdida,
             distribucion_subsistema=self.sia_dists_marginales,
-            distribucion_particion=None,  # Opcional: puede incluirse si es útil
+            distribucion_particion=None,
             tiempo_total=time.time() - self.sia_tiempo_inicio,
             particion=fmt_mip,
         )
+    
+    def _calcular_perdida_biparticion(self, grupoA, grupoB):
+        """
+        Calcula la pérdida (EMD) entre la distribución marginal del subsistema y la de la partición.
+        """
+        grupoA = np.array(grupoA, dtype=np.int8)
+        grupoB = np.array(grupoB, dtype=np.int8)
+        # Crear subsistemas condicionados a cada grupo
+        subsistema_A = self.sia_subsistema.condicionar(grupoA)
+        subsistema_B = self.sia_subsistema.condicionar(grupoB)
+        distA = subsistema_A.distribucion_marginal()
+        distB = subsistema_B.distribucion_marginal()
+        # Calcula la distancia EMD (puedes usar wasserstein_distance o tu propia función)
+        return wasserstein_distance(distA, distB)
+    
 
     def _crear_ncubos(self, tamaño_cubo):
         """

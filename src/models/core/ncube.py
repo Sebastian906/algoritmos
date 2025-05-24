@@ -32,57 +32,27 @@ class NCube:
         indices_condicionados: NDArray[np.int8],
         estado_inicial: NDArray[np.int8],
     ) -> "NCube":
-        """
-        Aplicar condiciones de fondo sobre un n-cubo. En estas lo que se hace es seleccionar una serie de caras sobre el n-cubo según las dimensiones escogidas y su estado inicial específico asociado, descartandose así todas las demás que no pertenezcan al indice condicionado.
-        En la selección de las dimensiones es importante saber cómo la dimensión más externa es la más significativa, de forma que la selección debe hacerse de afuera hacia adentro.
-        Debe tenerse claro también la localidad de las dimensiones puesto aunque se tengan dimensiones muy superiores no hay correspondencia con el total de dimensiones del cubo (dimensiones locales).
-
-        Args:
-        ----------
-            indices_condicionados (NDArray[np.int8]): Dimensiones o ejes en los cuales se aplicará el condicinamiento.
-            estado_inicial (NDArray[np.int8]): El estado inicial asociado al sistema.
-
-        Returns:
-        -------
-
-            NCube: El n-cubo seleccionado en todos los ejes, pero se definen para dar selección los cuales se hayan enviado como parámetros.
-
-        Example:
-        -------
-        El n-cubo original está asociado con el estado inicial
-
-        >>> estado_inicial = np.array([1,0,0])
-        >>> mi_ncubo
-            NCube(index=(1,)):
-                dims=(0, 1, 2)
-                shape=(2, 2, 2)
-                data=
-                    [[[0.1  0.3 ]
-                    [0.5  0.7 ]]
-                    [[0.9  0.11]
-                    [0.13 0.15]]]
-        >>> dimensiones = np.array([2])
-        >>> mi_ncubo.condicionar(dimensiones, estado_incial)
-            NCube(index=(1,)):
-                dims=(0, 1)
-                shape=(2, 2)
-                data=
-                    [[0.1 0.3]
-                    [0.5 0.7]]
-        """
         numero_dims = self.dims.size
         seleccion = [slice(None)] * numero_dims
 
+        # Solo condiciona si la dimensión está en self.dims
+        condicionados_locales = []
         for condicion in indices_condicionados:
-            level_arr = numero_dims - (condicion + 1)
-            seleccion[level_arr] = estado_inicial[condicion]
+            if condicion in self.dims:
+                level_arr = numero_dims - (np.where(self.dims == condicion)[0][0] + 1)
+                seleccion[level_arr] = estado_inicial[condicion]
+                condicionados_locales.append(condicion)
 
         nuevas_dims = np.array(
-            [dim for dim in self.dims if dim not in indices_condicionados],
+            [dim for dim in self.dims if dim not in condicionados_locales],
             dtype=np.int8,
         )
+        nuevo_data = self.data[tuple(seleccion)]
+        # Asegura que la forma de data y dims coincidan
+        if nuevo_data.ndim == 0:
+            nuevo_data = np.array([nuevo_data])
         return NCube(
-            data=self.data[tuple(seleccion)],
+            data=nuevo_data,
             dims=nuevas_dims,
             indice=self.indice,
         )
