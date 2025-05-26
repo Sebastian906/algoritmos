@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-from pyemd import emd
+# from pyemd import emd
 
 from src.models.enums.distance import MetricDistance
 from src.models.enums.notation import Notation
@@ -39,7 +39,7 @@ def literales(remaining_vars: NDArray[np.int8], lower: bool = False):
 def seleccionar_metrica(distancia_usada: str):
     distancias_metricas = {
         MetricDistance.EMD_EFECTO.value: emd_efecto,
-        MetricDistance.EMD_CAUSA.value: emd_causal,
+        # MetricDistance.EMD_CAUSA.value: emd_causal,
         # ...otras
     }
     return distancias_metricas[distancia_usada]
@@ -60,25 +60,26 @@ def emd_efecto(u: NDArray[np.float32], v: NDArray[np.float32]) -> float:
     return np.sum(np.abs(u - v))
 
 
-def emd_causal(u: NDArray[np.float64], v: NDArray[np.float64]) -> float:
-    """
-    Calculate the Earth Mover's Distance (EMD) between two probability distributions u and v.
-    The Hamming distance was used as the ground metric.
-    """
-    if not all(isinstance(arr, np.ndarray) for arr in [u, v]):
-        raise TypeError("u and v must be numpy arrays.")
+# def emd_causal(u: NDArray[np.float64], v: NDArray[np.float64]) -> float:
+#     """
+#     Calculate the Earth Mover's Distance (EMD) between two probability distributions u and v.
+#     The Hamming distance was used as the ground metric.
+#     """
+#     if not all(isinstance(arr, np.ndarray) for arr in [u, v]):
+#         raise TypeError("u and v must be numpy arrays.")
 
-    n: int = u.size
-    costs: NDArray[np.float64] = np.empty((n, n))
+#     n: int = u.size
+#     costs: NDArray[np.float64] = np.empty((n, n))
 
-    for i in range(n):
-        # Utiliza comprensión de listas para calcular los costos
-        costs[i, :i] = [hamming_distance(i, j) for j in range(i)]
-        costs[:i, i] = costs[i, :i]  # Reflejar los valores
-    np.fill_diagonal(costs, INT_ZERO)
+#     for i in range(n):
+#         # Utiliza comprensión de listas para calcular los costos
+#         costs[i, :i] = [hamming_distance(i, j) for j in range(i)]
+#         costs[:i, i] = costs[i, :i]  # Reflejar los valores
+#     np.fill_diagonal(costs, INT_ZERO)
 
-    cost_mat: NDArray[np.float64] = np.array(costs, dtype=np.float64)
-    return emd(u, v, cost_mat)
+#     cost_mat: NDArray[np.float64] = np.array(costs, dtype=np.float64)
+#     return -1
+    # return emd(u, v, cost_mat)
 
 
 def hamming_distance(a: int, b: int) -> int:

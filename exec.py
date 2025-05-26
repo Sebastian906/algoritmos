@@ -6,7 +6,7 @@ def main():
     profiler_manager.enabled = True
 
     # Llamar directamente a leer_columna_excel desde main.py
-    leer_columna_excel("C:\\Users\\mauri\\Downloads\\Prueba aotomatizador.xlsx", "Prueba aotomatizador")
+    leer_columna_excel("C:\\Users\\usuario\\Downloads\\Prueba aotomatizador 10.xlsx", "Prueba aotomatizador")
 
 if __name__ == "__main__":
     main()

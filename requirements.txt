@@ -1,9 +1,9 @@
 numpy<2.0
-pyemd
-pyphi
+# pyemd
+# pyphi
 openpyxl
 pandas
 pyinstrument
 pyttsx3
 colorama
-setuptools >= 77.0.0
+# setuptools >= 77.0.0
