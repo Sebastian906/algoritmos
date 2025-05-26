@@ -65,6 +65,7 @@ def leer_columna_excel(ruta_archivo, nombre_columna):
                 resultado = iniciar(alcance, mecanismo)
                 if resultado is not None:
                     print(resultado.perdida, resultado.tiempo_ejecucion, sep="\t")
+                    print(f"{resultado.particion}")
                 else:
                     print("Tiempo excedido (60 minutos). Terminando proceso...")
     except Exception as e:

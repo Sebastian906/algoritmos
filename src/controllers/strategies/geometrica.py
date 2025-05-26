@@ -1,141 +1,145 @@
-import time 
+import time
 import numpy as np
 from itertools import combinations
 
-# Imports del framework del proyecto
 from src.models.base.sia import SIA
 from src.models.core.solution import Solution
-from src.funcs.format import fmt_biparte_geometrico
+from src.funcs.format import fmt_biparte_q
 from src.constants.models import GEOMETRIC_LABEL, GEOMETRIC_ANALYSIS_TAG
-from src.constants.base import TYPE_TAG, NET_LABEL, INFTY_POS
+from src.constants.base import TYPE_TAG, NET_LABEL
 from src.middlewares.slogger import SafeLogger
 from src.middlewares.profile import profiler_manager, profile
-from scipy.stats import wasserstein_distance 
+from itertools import chain, combinations
+# ...existing code...
 
 class GeometricSIA(SIA):
     """
     Estrategia geométrica para encontrar la bipartición óptima (MIP).
-    Utiliza una representación del sistema como hipercubo y evalúa transiciones 
-    entre estados con una función de costo basada en distancia de Hamming.
+    Utiliza los n-cubos ya generados por el sistema y busca la partición causal
+    que minimiza la pérdida (EMD) entre la distribución marginal original y la particionada.
     """
-    
+
     def __init__(self, gestor):
         super().__init__(gestor)
-        # Inicia perfilador con nombre de red y número de nodos
         profiler_manager.start_session(f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}")
         self.logger = SafeLogger("GEOMETRIC")
 
     @profile(context={TYPE_TAG: GEOMETRIC_ANALYSIS_TAG})
     def aplicar_estrategia(self, condicion, alcance, mecanismo):
         """
-        Estrategia geométrica corregida: busca la bipartición óptima usando EMD.
+        Busca la bipartición óptima usando la tabla de costos geométrica.
         """
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
-        self.indices_mecanismo = self.sia_subsistema.dims_ncubos
-        self.indices_alcance = self.sia_subsistema.indices_ncubos
+        nodos_mecanismo = list(self.sia_subsistema.dims_ncubos)
+        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
 
-        nodos = list(self.indices_mecanismo)
-        n = len(nodos)
+        # Mapeo de índices globales a locales
+        indices_globales = list(self.sia_subsistema.indices_ncubos)
+        mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
+
+        # Usa la función estados() para obtener todos los estados binarios posibles
+        estados_bin = self.sia_subsistema.estados() if callable(self.sia_subsistema.estados) else self.sia_subsistema.estados
+        num_estados = len(estados_bin)
+
+        # Calcula la tabla de costos una sola vez
+        tabla_costos = self.calcular_tabla_costos(estados_bin)
+
         mejores = None
-        mejor_perdida = float("inf")
+        mejor_costo = float("inf")
 
-        # Genera todas las particiones no triviales del mecanismo
-        for k in range(1, n // 2 + 1):
-            for grupoA in combinations(nodos, k):
-                grupoB = tuple(set(nodos) - set(grupoA))
-                # Calcula la pérdida (EMD) para esta bipartición
-                perdida = self._calcular_perdida_biparticion(grupoA, grupoB)
-                if perdida < mejor_perdida:
-                    mejor_perdida = perdida
-                    mejores = grupoA
+        # Genera todas las biparticiones no triviales de nodos_alcance
+        def todas_biparticiones(nodos):
+            nodos = list(nodos)
+            for r in range(1, len(nodos)):
+                for grupoA in combinations(nodos, r):
+                    grupoB = [n for n in nodos if n not in grupoA]
+                    yield grupoA, grupoB
 
-        nodos_totales = len(self.indices_mecanismo) + len(self.indices_alcance)
-        nodos_complementarios = list(set(range(nodos_totales)) - set(mejores))
-        fmt_mip = fmt_biparte_geometrico(mejores, nodos_complementarios)
+        for grupoA, grupoB in todas_biparticiones(nodos_alcance):
+            # Puedes ajustar aquí cómo defines los grupos para la función de costo
+            # Por ejemplo, podrías definir que grupoA es el conjunto aislado y grupoB el resto
+            indicesA = [mapa_global_a_local[n] for n in grupoA]
+            indicesB = [mapa_global_a_local[n] for n in grupoB]
+
+            costo_total = 0.0
+            for i in range(num_estados):
+                for j in range(num_estados):
+                    # Si los estados difieren solo en los nodos de grupoA, cuenta el costo
+                    if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
+                        int_v = self._binario_a_entero(estados_bin[i])
+                        int_u = self._binario_a_entero(estados_bin[j])
+                        costo_total += tabla_costos[(int_v, int_u)]
+
+            if costo_total < mejor_costo:
+                mejor_costo = costo_total
+                mejores = (
+                    [(1, n) for n in grupoA],
+                    [(1, n) for n in grupoB] + [(0, n) for n in nodos_mecanismo]
+                )
+
+        if mejores is not None:
+            fmt_mip = fmt_biparte_q(
+                mejores[0], mejores[1]
+            )
+        else:
+            fmt_mip = "No se encontró partición válida"
 
         return Solution(
             estrategia=GEOMETRIC_LABEL,
-            perdida=mejor_perdida,
+            perdida=mejor_costo,
             distribucion_subsistema=self.sia_dists_marginales,
             distribucion_particion=None,
             tiempo_total=time.time() - self.sia_tiempo_inicio,
             particion=fmt_mip,
         )
-    
-    def _calcular_perdida_biparticion(self, grupoA, grupoB):
+
+    def calcular_tabla_costos(self, estados_bin):
         """
-        Calcula la pérdida (EMD) entre la distribución marginal del subsistema y la de la partición.
+        Construye la tabla de costos T entre todos los pares de estados binarios v y u del sistema.
+        Aplica: t(i,j) = γ * |X[i] - X[j]|, con γ = 2^(-dH(i,j))
         """
-        grupoA = np.array(grupoA, dtype=np.int8)
-        grupoB = np.array(grupoB, dtype=np.int8)
-        # Crear subsistemas condicionados a cada grupo
-        subsistema_A = self.sia_subsistema.condicionar(grupoA)
-        subsistema_B = self.sia_subsistema.condicionar(grupoB)
-        distA = subsistema_A.distribucion_marginal()
-        distB = subsistema_B.distribucion_marginal()
-        # Calcula la distancia EMD (puedes usar wasserstein_distance o tu propia función)
-        return wasserstein_distance(distA, distB)
-    
+        T = {}
+        num_estados = len(estados_bin)
 
-    def _crear_ncubos(self, tamaño_cubo):
-        """
-        Genera todos los hipercubos posibles de tamaño `tamaño_cubo`
-        a partir de las combinaciones de los índices del mecanismo.
-        """
-        self.ncubos = [list(c) for c in combinations(self.indices_mecanismo, tamaño_cubo)]
-        print(f"Generando {len(self.ncubos)} cubos de tamaño {tamaño_cubo}...")
+        for i in range(num_estados):
+            for j in range(num_estados):
+                estado_v = estados_bin[i]
+                estado_u = estados_bin[j]
+                int_v = self._binario_a_entero(estado_v)
+                int_u = self._binario_a_entero(estado_u)
 
-    def _calcular_tabla_costos(self):
-        """
-        Calcula la tabla de costos T para cada par de estados posibles (v, u)
-        en cada cubo generado. Se utiliza:
-        - La distancia de Hamming entre los estados
-        - Un factor de decaimiento exponencial: gamma = 2^-d
-        - Diferencias de probabilidad condicional obtenidas de los tensores
-        """
-        T = {}  # Diccionario con claves: (i_cubo, estado_v, estado_u)
+                d = self._distancia_hamming(estado_v, estado_u)
+                gamma = 2.0 ** -d if d > 0 else 1.0  # γ = 2^-dH
 
-        for i_cubo, indices_cubo in enumerate(self.ncubos):
-            n = len(indices_cubo)
+                # Aquí usas los n-cubos para obtener el valor del estado
+                val_v = self._valor_estado(int_v)
+                val_u = self._valor_estado(int_u)
 
-            for v in range(2**n):      # Estado v del mecanismo
-                for u in range(2**n):  # Estado u del alcance
-                    d = bin(v ^ u).count("1")         # Distancia de Hamming entre v y u
-                    gamma = 2 ** -d                    # Factor de decrecimiento
-
-                    # Valor del estado v y u en los tensores correspondientes
-                    Xv = self._valor_estado(v)
-                    Xu = self._valor_estado(u)
-
-                    # Costo de transición almacenado
-                    T[(i_cubo, v, u)] = gamma * abs(Xv - Xu)
-
+                T[(int_v, int_u)] = gamma * abs(val_v - val_u)
         return T
 
-    def _valor_estado(self, estado):
+    def _valor_estado(self, idx):
         """
-        Obtiene el valor asociado a un estado binario completo (según la TPM).
+        Obtiene el valor asociado a un estado dado su índice entero.
+        Usa los cubos creados por ncubos.
         """
-        return self.sia_subsistema.valor_estado(estado)
+        valor = 0.0
+        for ncubo in self.sia_subsistema.ncubos:
+            try:
+                valor += ncubo.data.flat[idx]
+            except IndexError:
+                continue
+        return valor
 
-    def _identificar_candidatos(self, tabla_costos):
+    def _binario_a_entero(self, binario):
         """
-        Filtra los pares de estados con costo cero como candidatos óptimos.
+        Convierte una lista o array binaria a entero.
         """
-        return [k for k, v in tabla_costos.items() if v == 0]
+        return int("".join(str(b) for b in binario), 2)
 
-    def _evaluar_candidatos(self, candidatos, tabla_costos):
+    def _distancia_hamming(self, v, u):
         """
-        Evalúa los candidatos y selecciona el que tenga menor costo (idealmente 0).
+        Calcula la distancia de Hamming entre dos listas/arrays binarios.
         """
-        if not candidatos:
-            return ((), INFTY_POS)  # No hay candidatos, retorna infinito
-        mejor = min(candidatos, key=lambda c: tabla_costos[c])
-        return (mejor, tabla_costos[mejor])
-    def _valor_estado_cubo(self, estado, indices_cubo, tipo='mecanismo'):
-        """
-        Extrae el valor asociado a un estado binario dentro de un cubo.
-        Internamente usa self.sia_subsistema.valor_estado(estado), que ya maneja la conversión.
-        """
-        return self._valor_estado(estado)
+        return sum(b1 != b2 for b1, b2 in zip(v, u))

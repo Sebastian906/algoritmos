@@ -305,4 +305,11 @@ class System:
 
         # Devolver el promedio (o 0.0 si no hay datos válidos)
         return float(np.mean(valores)) if valores else 0.0
+    def estados(self) -> np.ndarray:
+        """
+        Devuelve todos los posibles estados binarios del sistema como un arreglo.
+        Cada fila es un estado binario posible.
+        """
+        n = len(self.indices_ncubos)
+        return np.array(np.meshgrid(*[[0, 1]] * n)).T.reshape(-1, n)
 
