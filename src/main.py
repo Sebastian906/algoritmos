@@ -72,6 +72,6 @@ def leer_columna_excel(ruta_archivo, nombre_columna):
         print(f"Error al leer el archivo: {e}")
 
 if __name__ == "__main__":
-    ruta_excel = "c:\\Users\\mauri\\Downloads\\Prueba aotomatizador.xlsx"
+    ruta_excel = "C:\\Users\\usuario\\Downloads\\Prueba aotomatizador 5.xlsx"
     nombre_columna = "Prueba aotomatizador"
     leer_columna_excel(ruta_excel, nombre_columna)

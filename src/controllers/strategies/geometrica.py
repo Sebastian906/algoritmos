@@ -17,6 +17,8 @@ from src.controllers.strategies.heurisiticas import Heuristicas
 class GeometricSIA(SIA):
     def __init__(self, gestor):
         super().__init__(gestor)
+        random.seed(42);
+        np.random.seed(42);
         profiler_manager.start_session(f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}")
         self.logger = SafeLogger("GEOMETRIC")
 
@@ -25,16 +27,21 @@ class GeometricSIA(SIA):
         """Estrategia original con búsqueda exhaustiva"""
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
-        nodos_mecanismo = list(self.sia_subsistema.dims_ncubos)
-        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
+        nodos_mecanismo = sorted(list(self.sia_subsistema.dims_ncubos))
+        nodos_alcance = sorted(list(self.sia_subsistema.indices_ncubos))
 
-        indices_globales = list(self.sia_subsistema.indices_ncubos)
+        indices_globales = sorted(list(self.sia_subsistema.indices_ncubos))
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
         estados_bin = self.sia_subsistema.estados() if callable(self.sia_subsistema.estados) else self.sia_subsistema.estados
         num_estados = len(estados_bin)
 
         # Tabla de costos por variable
-        tabla_costos = {v: self.calcular_tabla_costos_variable(estados_bin, v) for v in range(len(self.sia_subsistema.ncubos))}
+        variables_ordenadas = sorted(range(len(self.sia_subsistema.ncubos)))
+        tabla_costos = {}
+        for v in variables_ordenadas:
+            tabla_costos[v] = self.calcular_tabla_costos_variable(estados_bin, v)
+        # tabla_costos = {v: self.calcular_tabla_costos_variable(estados_bin, v) 
+        #                 for v in range(len(self.sia_subsistema.ncubos))}
         mejores = None
         mejor_costo = float("inf")
 
@@ -44,6 +51,7 @@ class GeometricSIA(SIA):
                     grupoB = [n for n in nodos if n not in grupoA]
                     yield grupoA, grupoB
 
+        # Búsqueda exhaustiva original
         for grupoA, grupoB in todas_biparticiones(nodos_alcance):
             indicesA = [mapa_global_a_local[n] for n in grupoA]
             indicesB = [mapa_global_a_local[n] for n in grupoB]
@@ -63,16 +71,48 @@ class GeometricSIA(SIA):
             if costo_total < mejor_costo:
                 mejor_costo = costo_total
                 mejores = (
-                    [(1, n) for n in grupoA],
-                    [(1, n) for n in grupoB] + [(0, n) for n in nodos_mecanismo]
+                    [(1, n) for n in grupoA],  # Tiempo futuro (t=1)
+                    [(1, n) for n in grupoB] + [(0, n) for n in nodos_mecanismo]  # Presente (t=0)
                 )
-        heuristica = Heuristicas()
-        mejor_solucion, mejor_costo = heuristica.simulated_annealing_bipartition(estados_bin, tabla_costos, nodos_alcance)
+
+        heuristica = Heuristicas(seed=42)
+        
+        # Pasar los objetos necesarios a la heurística
+        heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
+        
+        mejor_solucion_heur, mejor_costo_heur = heuristica.simulated_annealing_bipartition(
+            estados_bin, tabla_costos, nodos_alcance, seed=42 
+        )
+
         print("resultado normal")
-        print(mejores[0], mejores[1])
+        if mejores:
+            print(mejores[0], mejores[1])
+        else:
+            print("No se encontró solución exhaustiva")
+            
         print("resultado heuristica")
-        print(mejor_solucion[0], mejor_solucion[1])
-        fmt_mip = fmt_biparte_q(mejor_solucion[0], mejor_solucion[1]) if mejor_solucion else "No se encontró partición válida"
+        if mejor_solucion_heur:
+            
+            # Convertir la solución heurística al formato esperado (tiempo, nodo)
+            solucion_formateada = (
+                [(1, n) for n in mejor_solucion_heur[0]],  # Grupo A en tiempo futuro
+                [(1, n) for n in mejor_solucion_heur[1]] + [(0, n) for n in nodos_mecanismo]  # Grupo B + mecanismo
+            )
+            print(solucion_formateada[0], solucion_formateada[1])
+            
+            # Usar la mejor solución entre exhaustiva y heurística
+            if mejor_costo_heur < mejor_costo:
+                mejores = solucion_formateada
+                mejor_costo = mejor_costo_heur
+                print(f"Heurística encontró mejor solución: costo {mejor_costo_heur} vs {mejor_costo}")
+        else:
+            print("No se encontró solución heurística")
+
+        # Formatear la mejor solución encontrada
+        if mejores:
+            fmt_mip = fmt_biparte_q(mejores[0], mejores[1])
+        else:
+            fmt_mip = "No se encontró partición válida"
 
         return Solution(
             estrategia=GEOMETRIC_LABEL,
