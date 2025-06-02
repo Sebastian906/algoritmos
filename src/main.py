@@ -1,10 +1,10 @@
 import pandas as pd
 import multiprocessing
-from src.controllers.strategies.geometrica import GeometricSIA  # Cambio aquí
+from src.controllers.strategies.geometrica import GeometricSIA # Cambio aquí
 from src.controllers.manager import Manager
 
 # Lista de caracteres base
-CARACTERES_BASE = "ABCDEFGHIJ"  # Asegúrate de que coincida con el número de nodos
+CARACTERES_BASE = "ABCDE"  # Asegúrate de que coincida con el número de nodos
 
 def procesar_cadena(cadena):
     try:
@@ -19,7 +19,7 @@ def procesar_cadena(cadena):
         return None, None
 
 def ejecutar_proceso(resultado_queue, condiciones, alcance, mecanismo):
-    estado_inicio = "1000000000"  # Ajusta a la cantidad de nodos
+    estado_inicio = "10000"  # Ajusta a la cantidad de nodos
     config_sistema = Manager(estado_inicial=estado_inicio)
     analizador = GeometricSIA(config_sistema)  # Cambio aquí
     resultado = analizador.aplicar_estrategia(condiciones, alcance, mecanismo)
@@ -47,7 +47,7 @@ def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=3600):
     return None
 
 def iniciar(alcance, mecanismo):
-    condiciones = "1111111111"  # Ajusta a la cantidad de nodos
+    condiciones = "11111"  # Ajusta a la cantidad de nodos
     return ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo)
 
 def leer_columna_excel(ruta_archivo, nombre_columna):
@@ -72,6 +72,6 @@ def leer_columna_excel(ruta_archivo, nombre_columna):
         print(f"Error al leer el archivo: {e}")
 
 if __name__ == "__main__":
-    ruta_excel = "C:\\Users\\usuario\\Downloads\\Prueba aotomatizador 10.xlsx"
+    ruta_excel = "C:\\Users\\mauri\\Downloads\\Prueba aotomatizador.xlsx"
     nombre_columna = "Prueba aotomatizador"
     leer_columna_excel(ruta_excel, nombre_columna)
