@@ -8,11 +8,11 @@ class Heuristicas:
     def __init__(self):
         pass
 
-    def simulated_annealing_bipartition(self, estados_bin, tabla_costos, temp_inicial=1000, temp_final=0.1, alpha=0.95):
+    def simulated_annealing_bipartition(self, estados_bin, tabla_costos,indices_ncubos):
         """
         Encuentra bipartición óptima usando recocido simulado
         """
-        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
+        nodos_alcance = list(indices_ncubos)
         
         # Solución inicial aleatoria
         k = max(1, len(nodos_alcance) // 2)
@@ -20,16 +20,16 @@ class Heuristicas:
         grupoB = [n for n in nodos_alcance if n not in grupoA]
         
         mejor_solucion = (grupoA, grupoB)
-        mejor_costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos)
+        mejor_costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, nodos_alcance)
         
-        temperatura = temp_inicial
+        temperatura = 1000
         solucion_actual = mejor_solucion
         costo_actual = mejor_costo
         
-        while temperatura > temp_final:
+        while temperatura > 0.1:
             # Generar vecino: intercambiar un nodo entre grupos
             nueva_grupoA, nueva_grupoB = self._generar_vecino(solucion_actual)
-            nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos)
+            nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
             
             # Criterio de aceptación
             delta = nuevo_costo - costo_actual
@@ -41,7 +41,7 @@ class Heuristicas:
                     mejor_solucion = solucion_actual
                     mejor_costo = nuevo_costo
             
-            temperatura *= alpha
+            temperatura *= 0.95
         
         return mejor_solucion, mejor_costo
 
@@ -73,11 +73,11 @@ class Heuristicas:
         
         return mejor_solucion, mejor_costo
 
-    def tabu_search_bipartition(self, estados_bin, tabla_costos, max_iter=1000, tabu_size=50):
+    def tabu_search_bipartition(self, estados_bin, tabla_costos,indices_ncubos, max_iter=1000, tabu_size=50):
         """
         Búsqueda tabú para bipartición óptima
         """
-        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
+        nodos_alcance = list(indices_ncubos)
         
         # Solución inicial
         k = max(1, len(nodos_alcance) // 2)
@@ -113,11 +113,11 @@ class Heuristicas:
         
         return mejor_solucion, mejor_costo
 
-    def genetic_algorithm_bipartition(self, estados_bin, tabla_costos, pop_size=100, generations=500):
+    def genetic_algorithm_bipartition(self, estados_bin, tabla_costos,indices_ncubos, pop_size=100, generations=500):
         """
         Algoritmo genético para encontrar bipartición óptima
         """
-        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
+        nodos_alcance = list(indices_ncubos)
         n_nodos = len(nodos_alcance)
         
         # Población inicial
@@ -162,7 +162,7 @@ class Heuristicas:
         
         return (grupoA, grupoB), min(fitness_final)
 
-    def spectral_clustering_bipartition(self, estados_bin, tabla_costos):
+    def spectral_clustering_bipartition(self, estados_bin, tabla_costos, indices_ncubos):
         """
         Usa clustering espectral basado en la geometría del hipercubo
         """
@@ -171,7 +171,7 @@ class Heuristicas:
         except ImportError:
             from numpy.linalg import eigh
         
-        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
+        nodos_alcance = list(indices_ncubos)
         n_nodos = len(nodos_alcance)
         
         W = np.zeros((n_nodos, n_nodos))
@@ -209,11 +209,11 @@ class Heuristicas:
         costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos)
         return (grupoA, grupoB), costo
 
-    def random_search_bipartition(self, estados_bin, tabla_costos, max_iter=1000):
+    def random_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000):
         """
         Búsqueda aleatoria como algoritmo de fallback
         """
-        nodos_alcance = list(self.sia_subsistema.indices_ncubos)
+        nodos_alcance = list(indices_ncubos)
         mejor_solucion = None
         mejor_costo = float('inf')
         
@@ -230,9 +230,9 @@ class Heuristicas:
         return mejor_solucion, mejor_costo
 
     # Funciones auxiliares
-    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos):
+    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos):
         """Evalúa el costo de una bipartición específica"""
-        indices_globales = list(self.sia_subsistema.indices_ncubos)
+        indices_globales = list(indices_ncubos)
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
         
         indicesA = [mapa_global_a_local[n] for n in grupoA if n in mapa_global_a_local]

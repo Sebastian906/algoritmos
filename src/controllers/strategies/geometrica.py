@@ -34,7 +34,7 @@ class GeometricSIA(SIA):
         num_estados = len(estados_bin)
 
         # Tabla de costos por variable
-        tablas_costos = {v: self.calcular_tabla_costos_variable(estados_bin, v) for v in range(len(self.sia_subsistema.ncubos))}
+        tabla_costos = {v: self.calcular_tabla_costos_variable(estados_bin, v) for v in range(len(self.sia_subsistema.ncubos))}
         mejores = None
         mejor_costo = float("inf")
 
@@ -51,7 +51,7 @@ class GeometricSIA(SIA):
             costo_total = 0.0
             contador = 0.0
             costos_por_variable = {}
-            for v, tabla in tablas_costos.items():
+            for v, tabla in tabla_costos.items():
                 for i in range(num_estados):
                     for j in range(num_estados):
                         if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
@@ -66,8 +66,13 @@ class GeometricSIA(SIA):
                     [(1, n) for n in grupoA],
                     [(1, n) for n in grupoB] + [(0, n) for n in nodos_mecanismo]
                 )
-
-        fmt_mip = fmt_biparte_q(mejores[0], mejores[1]) if mejores else "No se encontró partición válida"
+        heuristica = Heuristicas()
+        mejor_solucion, mejor_costo = heuristica.simulated_annealing_bipartition(estados_bin, tabla_costos, nodos_alcance)
+        print("resultado normal")
+        print(mejores[0], mejores[1])
+        print("resultado heuristica")
+        print(mejor_solucion[0], mejor_solucion[1])
+        fmt_mip = fmt_biparte_q(mejor_solucion[0], mejor_solucion[1]) if mejor_solucion else "No se encontró partición válida"
 
         return Solution(
             estrategia=GEOMETRIC_LABEL,
