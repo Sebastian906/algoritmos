@@ -81,7 +81,7 @@ class GeometricSIA(SIA):
         heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
         
         mejor_solucion_heur, mejor_costo_heur = heuristica.simulated_annealing_bipartition(
-            estados_bin, tabla_costos, nodos_alcance, seed=42 
+            estados_bin, tabla_costos, nodos_alcance 
         )
 
         print("resultado normal")
@@ -103,8 +103,8 @@ class GeometricSIA(SIA):
             # Usar la mejor solución entre exhaustiva y heurística
             if mejor_costo_heur < mejor_costo:
                 mejores = solucion_formateada
-                mejor_costo = mejor_costo_heur
                 print(f"Heurística encontró mejor solución: costo {mejor_costo_heur} vs {mejor_costo}")
+                mejor_costo = mejor_costo_heur
         else:
             print("No se encontró solución heurística")
 

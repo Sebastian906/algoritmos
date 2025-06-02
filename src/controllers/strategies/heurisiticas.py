@@ -5,25 +5,23 @@ from collections import deque
 import numpy as np
 
 class Heuristicas:
-    def __init__(self, seed=42):
+    def __init__(self, seed):
         self.sia_subsistema = None
         self.mapa_global_a_local = None
         self.seed = seed
-        random.seed(seed)
-        np.random.seed(seed)
 
     def set_sia_context(self, sia_subsistema, mapa_global_a_local):
         """Establece el contexto necesario para los cálculos"""
         self.sia_subsistema = sia_subsistema
         self.mapa_global_a_local = mapa_global_a_local
 
-    def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos, seed=None):
+    def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos):
         """
         Encuentra bipartición óptima usando recocido simulado
         """
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
+        if self.seed is not None:
+            random.seed(self.seed)
+            np.random.seed(self.seed)
 
         nodos_alcance = sorted(list(indices_ncubos))
         
