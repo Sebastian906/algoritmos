@@ -6,4 +6,5 @@ pandas
 pyinstrument
 pyttsx3
 colorama
+scipy
 # setuptools >= 77.0.0

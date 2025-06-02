@@ -1,6 +1,6 @@
 import pandas as pd
 import multiprocessing
-from src.controllers.strategies.geometrica import GeometricSIA # Cambio aquí
+from src.controllers.strategies.qp_nodes import QNodes # Cambio aquí
 from src.controllers.manager import Manager
 
 # Lista de caracteres base
@@ -21,7 +21,7 @@ def procesar_cadena(cadena):
 def ejecutar_proceso(resultado_queue, condiciones, alcance, mecanismo):
     estado_inicio = "10000"  # Ajusta a la cantidad de nodos
     config_sistema = Manager(estado_inicial=estado_inicio)
-    analizador = GeometricSIA(config_sistema)  # Cambio aquí
+    analizador = QNodes(config_sistema)  # Cambio aquí
     resultado = analizador.aplicar_estrategia(condiciones, alcance, mecanismo)
     resultado_queue.put(resultado)
 
@@ -72,6 +72,6 @@ def leer_columna_excel(ruta_archivo, nombre_columna):
         print(f"Error al leer el archivo: {e}")
 
 if __name__ == "__main__":
-    ruta_excel = "C:\\Users\\mauri\\Downloads\\Prueba aotomatizador.xlsx"
+    ruta_excel = "C:\\Users\\usuario\\Downloads\\Prueba aotomatizador 5.xlsx"
     nombre_columna = "Prueba aotomatizador"
     leer_columna_excel(ruta_excel, nombre_columna)
