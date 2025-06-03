@@ -70,6 +70,7 @@ class GeometricSIA(SIA):
         indices_globales = sorted(list(self.sia_subsistema.indices_ncubos))
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
         estados_bin = self.sia_subsistema.estados() if callable(self.sia_subsistema.estados) else self.sia_subsistema.estados
+        
         # Paralelización de la creación de la tabla de costos
         variables_ordenadas = sorted(range(len(self.sia_subsistema.ncubos)))
         args_list = []
@@ -80,13 +81,17 @@ class GeometricSIA(SIA):
         with multiprocessing.Pool(processes=min(4, multiprocessing.cpu_count())) as pool:
             resultados = pool.map(calcular_tabla_costos_worker, args_list)
         tabla_costos = dict(resultados)
+        
         mejores = None
         mejor_costo = float("inf")
+        
         heuristica = Heuristicas(seed=42)
         heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
+        
         mejor_solucion_heur, mejor_costo_heur = heuristica.simulated_annealing_bipartition(
             estados_bin, tabla_costos, nodos_alcance, use_corrected_evaluation=True
         )
+        
         if mejor_solucion_heur:
             # Convertir la solución heurística al formato esperado (tiempo, nodo)
             solucion_formateada = (
@@ -115,10 +120,12 @@ class GeometricSIA(SIA):
             tiempo_total=time.time() - self.sia_tiempo_inicio,
             particion=fmt_mip,
         )
+    
     def _valor_estado_variable(self, idx, v_idx):
         try:
             return self.sia_subsistema.ncubos[v_idx].data.flat[idx]
         except (IndexError, AttributeError):
             return 0.0
+    
     def _binario_a_entero(self, binario):
         return int("".join(str(b) for b in binario), 2)

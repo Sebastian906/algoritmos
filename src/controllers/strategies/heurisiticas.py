@@ -17,6 +17,8 @@ class Heuristicas:
 
     def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos, use_corrected_evaluation=False):
         """
+        Algoritmo metaheurístico de optimización global que se inspira en el proceso de recocido de metalurgia, donde su metal se calienta y luego se enfría lentamente para mejorar su estrcutura cristalina.
+        Busca la solución óptima a un problema de optimización de manera probabilistica, explorando el espacio de soluciones y, a medida que la "temperatura" del sistema disminuye, aceptando cada vez menos soluciones que no mejoran la función objetivo
         Encuentra bipartición óptima usando recocido simulado
         Heuristica principal implementada
         """
@@ -36,10 +38,7 @@ class Heuristicas:
         grupoB = nodos_alcance[k:]
         
         mejor_solucion = (grupoA, grupoB)
-        if use_corrected_evaluation:
-            mejor_costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
-        else:
-            mejor_costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+        mejor_costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos) if use_corrected_evaluation else self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
 
         temperatura = 1000
         solucion_actual = mejor_solucion
@@ -103,6 +102,7 @@ class Heuristicas:
     def tabu_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000, tabu_size=50):
         """
         Búsqueda tabú para bipartición óptima
+        Método de optimización matemática, perteneciente a la clase de técnicas de búsqueda local. Aumenta el rendimiento del método de búsqueda local mediante el uso de estructuras de memoria: una vez que una potencial solución es determinada, se la marca como "tabú" de modo que el algoritmo no vuelva a visitar esa posible solución
         """
         nodos_alcance = list(indices_ncubos)
         
@@ -143,6 +143,7 @@ class Heuristicas:
     def genetic_algorithm_bipartition(self, estados_bin, tabla_costos, indices_ncubos, pop_size=100, generations=500):
         """
         Algoritmo genético para encontrar bipartición óptima
+        Técnica de optimización inspirada en la selección natural y evolución biológica. Se utiliza para encontrar soluciones a problemas complejos, buscando la mejor solución dentro de una población de posibles soluciones mediante la modificación iterativa de la población a través de procesos como la selección, el cruce y la mutación
         """
         nodos_alcance = list(indices_ncubos)
         n_nodos = len(nodos_alcance)
@@ -160,8 +161,8 @@ class Heuristicas:
         for _ in range(generations):
             fitness = []
             for individuo in poblacion:
-                grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit == 1]
-                grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit == 0]
+                grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit]
+                grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not bit]
                 costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
                 fitness.append(1.0 / (1.0 + costo))
             
@@ -177,21 +178,22 @@ class Heuristicas:
         
         fitness_final = []
         for individuo in poblacion:
-            grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit == 1]
-            grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit == 0]
+            grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit]
+            grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not bit]
             costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
             fitness_final.append(costo)
         
         mejor_idx = fitness_final.index(min(fitness_final))
         mejor_individuo = poblacion[mejor_idx]
-        grupoA = [nodos_alcance[i] for i, bit in enumerate(mejor_individuo) if bit == 1]
-        grupoB = [nodos_alcance[i] for i, bit in enumerate(mejor_individuo) if bit == 0]
+        grupoA = [nodos_alcance[i] for i, bit in enumerate(mejor_individuo) if bit]
+        grupoB = [nodos_alcance[i] for i, bit in enumerate(mejor_individuo) if not bit]
         
         return (grupoA, grupoB), min(fitness_final)
 
     def spectral_clustering_bipartition(self, estados_bin, tabla_costos, indices_ncubos):
         """
         Usa clustering espectral basado en la geometría del hipercubo
+        Técnica de agrupamiento, que utiliza la teoría de grafos para identificar grupos de nodos en un grafo, basado en la similitud entre los nodos. Es efectivo para agrupar datos no lineales y suele ser más eficiente que el clustering tradicional, como k-means, en ciertos casos
         """
         try:
             from scipy.linalg import eigh
@@ -239,6 +241,7 @@ class Heuristicas:
     def random_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000):
         """
         Búsqueda aleatoria como algoritmo de fallback
+        Métodos de optimización numérica qe no requieren el gradiente del problema de optimización, por lo que puede utilizarse en funciones no continuas ni diferenciables. También se conocen como métodos de búsqueda directa, sin derivada o caja negra
         """
         nodos_alcance = list(indices_ncubos)
         mejor_solucion = None
