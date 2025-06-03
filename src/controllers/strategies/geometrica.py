@@ -57,16 +57,31 @@ class GeometricSIA(SIA):
             indicesB = [mapa_global_a_local[n] for n in grupoB]
 
             costo_total = 0.0
-            contador = 0.0
-            costos_por_variable = {}
+            total_pares = 0
+            # contador = 0.0
+            # costos_por_variable = {}
+            # Suma de costos de todas las variables
             for v, tabla in tabla_costos.items():
+                costo_variable = 0.0
+                pares_variable = 0
+                
                 for i in range(num_estados):
                     for j in range(num_estados):
+                        # Verificar si los estados difieren en los índices del grupo A
                         if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
-                            costo_total += tabla[i][j]
-                            contador += 1.0
-                costos_por_variable[v] = costo_total/contador if contador > 0 else float("inf")
-            costo_total = min(costos_por_variable.values())
+                            costo_variable += tabla[i][j]
+                            pares_variable += 1
+                
+                if pares_variable > 0:
+                    # Normalizar por el número de pares para esta variable
+                    costo_total += costo_variable / pares_variable
+                    total_pares += 1
+
+            # Promedio de costos de todas las variables
+            if total_pares > 0:
+                costo_total = costo_total / total_pares
+            else:
+                costo_total = float("inf")
                 
             if costo_total < mejor_costo:
                 mejor_costo = costo_total
@@ -75,13 +90,14 @@ class GeometricSIA(SIA):
                     [(1, n) for n in grupoB] + [(0, n) for n in nodos_mecanismo]  # Presente (t=0)
                 )
 
+        # Llamar a la clase Heuristicas
         heuristica = Heuristicas(seed=42)
         
         # Pasar los objetos necesarios a la heurística
         heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
         
         mejor_solucion_heur, mejor_costo_heur = heuristica.simulated_annealing_bipartition(
-            estados_bin, tabla_costos, nodos_alcance 
+            estados_bin, tabla_costos, nodos_alcance, use_corrected_evaluation=True
         )
 
         print("resultado normal")

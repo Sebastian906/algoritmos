@@ -15,9 +15,10 @@ class Heuristicas:
         self.sia_subsistema = sia_subsistema
         self.mapa_global_a_local = mapa_global_a_local
 
-    def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos):
+    def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos, use_corrected_evaluation=False):
         """
         Encuentra bipartición óptima usando recocido simulado
+        Heuristica principal implementada
         """
         if self.seed is not None:
             random.seed(self.seed)
@@ -27,12 +28,19 @@ class Heuristicas:
         
         # Solución inicial aleatoria
         k = max(1, len(nodos_alcance) // 2)
+        if len(nodos_alcance) > 3:
+            k = random.randint(max(1, len(nodos_alcance) // 3), 
+                             min(len(nodos_alcance) - 1, 2 * len(nodos_alcance) // 3))
+            
         grupoA = nodos_alcance[:k]
         grupoB = nodos_alcance[k:]
         
         mejor_solucion = (grupoA, grupoB)
-        mejor_costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
-        
+        if use_corrected_evaluation:
+            mejor_costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+        else:
+            mejor_costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+
         temperatura = 1000
         solucion_actual = mejor_solucion
         costo_actual = mejor_costo
@@ -42,9 +50,13 @@ class Heuristicas:
         
         while temperatura > 0.1 and iteraciones < max_iteraciones:
             # Generar vecino: intercambiar un nodo entre grupos
-            nueva_grupoA, nueva_grupoB = self._generar_vecino(solucion_actual)
-            nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
-
+            nueva_grupoA, nueva_grupoB = self._generar_vecino_balanceado(solucion_actual)
+            
+            if use_corrected_evaluation:
+                nuevo_costo = self._evaluar_biparticion_corregida(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
+            else:
+                nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
+                
             # Criterio de aceptación
             delta = nuevo_costo - costo_actual
             if delta < 0 or random.random() < math.exp(-delta / temperatura):
@@ -245,16 +257,50 @@ class Heuristicas:
         return mejor_solucion, mejor_costo
 
     # Funciones auxiliares
-    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos):
+    def _evaluar_biparticion_corregida(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos):
         """Evalúa el costo de una bipartición específica"""
         indices_globales = sorted(list(indices_ncubos))
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
 
-        indicesA = sorted([mapa_global_a_local[n] for n in grupoA if n in mapa_global_a_local])  # ORDENAR
+        indicesA = sorted([mapa_global_a_local[n] for n in grupoA if n in mapa_global_a_local])
         num_estados = len(estados_bin)
         
         costo_total = 0.0
-        contador = 0
+        total_variables = 0
+        # contador = 0
+        # costos_por_variable = {}
+        
+        # Evaluar cada variable por separado y tomar el mínimo
+        for v in sorted(tabla_costos.keys()):
+            tabla = tabla_costos[v]
+            costo_variable = 0.0
+            contador_variable = 0
+            
+            for i in range(num_estados):
+                for j in range(num_estados):
+                    # Verificar si los estados difieren en los índices del grupo A
+                    if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
+                        costo_variable += tabla[i][j]
+                        contador_variable += 1
+            
+            if contador_variable > 0:
+                costo_total += costo_variable / contador_variable
+                total_variables += 1
+        
+        # Promedio de costos de todas las variables
+        if total_variables > 0:
+            return costo_total / total_variables
+        else:
+            return float("inf")
+        
+    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos):
+        """Evaluación original que toma el mínimo costo entre variables"""
+        indices_globales = sorted(list(indices_ncubos))
+        mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
+
+        indicesA = sorted([mapa_global_a_local[n] for n in grupoA if n in mapa_global_a_local])
+        num_estados = len(estados_bin)
+        
         costos_por_variable = {}
         
         # Evaluar cada variable por separado y tomar el mínimo
@@ -281,6 +327,31 @@ class Heuristicas:
         else:
             return float("inf")
 
+    def _generar_vecino_balanceado(self, solucion):
+        """
+        Genera un vecino evitando biparticiones extremas que aíslen pocos nodos
+        """
+        grupoA, grupoB = solucion
+        
+        if not grupoA or not grupoB:
+            return solucion
+        
+        # Evitar que grupos queden con muy pocos elementos
+        min_size = max(1, len(grupoA + grupoB) // 4)  # Al menos 25% en cada grupo si es posible
+        
+        if random.choice([True, False]) and len(grupoA) > min_size:
+            nodo = random.choice(grupoA)
+            nueva_grupoA = [n for n in grupoA if n != nodo]
+            nueva_grupoB = grupoB + [nodo]
+        elif len(grupoB) > min_size:
+            nodo = random.choice(grupoB)
+            nueva_grupoA = grupoA + [nodo]
+            nueva_grupoB = [n for n in grupoB if n != nodo]
+        else:
+            return solucion
+        
+        return nueva_grupoA, nueva_grupoB
+    
     def _generar_vecino(self, solucion):
         """Genera un vecino intercambiando un nodo entre grupos"""
         grupoA, grupoB = solucion
