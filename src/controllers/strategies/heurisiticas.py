@@ -107,8 +107,7 @@ class Heuristicas:
         nodos_alcance = list(indices_ncubos)
         
         # Solución inicial
-        k = max(1, len(nodos_alcance) // 2)
-        solucion_actual = (nodos_alcance[:k], nodos_alcance[k:])
+        solucion_actual = ([nodos_alcance[0]], nodos_alcance[1:])
         mejor_solucion = solucion_actual
         mejor_costo = self._evaluar_biparticion(*solucion_actual, estados_bin, tabla_costos, indices_ncubos)
         
@@ -140,14 +139,14 @@ class Heuristicas:
         
         return mejor_solucion, mejor_costo
 
-    def genetic_algorithm_bipartition(self, estados_bin, tabla_costos, indices_ncubos, pop_size=100, generations=500):
+    def genetic_algorithm_bipartition(self, estados_bin, tabla_costos,  indices_ncubos, pop_size=100, generations=500):
         """
         Algoritmo genético para encontrar bipartición óptima
-        Técnica de optimización inspirada en la selección natural y evolución biológica. Se utiliza para encontrar soluciones a problemas complejos, buscando la mejor solución dentro de una población de posibles soluciones mediante la modificación iterativa de la población a través de procesos como la selección, el cruce y la mutación
+        Técnica de optimización inspirada en la selección natural y evolución   biológica. Se utiliza para encontrar soluciones a problemas complejos, buscando   la mejor solución dentro de una población de posibles soluciones mediante la  modificación iterativa de la población a través de procesos como la selección,   el cruce y la mutación
         """
         nodos_alcance = list(indices_ncubos)
         n_nodos = len(nodos_alcance)
-        
+
         # Población inicial
         poblacion = []
         for _ in range(pop_size):
@@ -157,15 +156,15 @@ class Heuristicas:
             elif sum(individuo) == n_nodos:
                 individuo[0] = 0
             poblacion.append(individuo)
-        
+
         for _ in range(generations):
             fitness = []
             for individuo in poblacion:
                 grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit]
-                grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not bit]
-                costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+                grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not    bit]
+                costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin,  tabla_costos, indices_ncubos)
                 fitness.append(1.0 / (1.0 + costo))
-            
+
             nueva_poblacion = []
             for _ in range(pop_size):
                 padre1 = self._seleccion_torneo(poblacion, fitness)
@@ -173,27 +172,27 @@ class Heuristicas:
                 hijo = self._cruce_uniforme(padre1, padre2)
                 hijo = self._mutacion(hijo, prob_mut=0.1)
                 nueva_poblacion.append(hijo)
-            
+
             poblacion = nueva_poblacion
-        
+
         fitness_final = []
         for individuo in poblacion:
             grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit]
             grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not bit]
-            costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+            costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin,  tabla_costos, indices_ncubos)
             fitness_final.append(costo)
-        
+
         mejor_idx = fitness_final.index(min(fitness_final))
         mejor_individuo = poblacion[mejor_idx]
         grupoA = [nodos_alcance[i] for i, bit in enumerate(mejor_individuo) if bit]
         grupoB = [nodos_alcance[i] for i, bit in enumerate(mejor_individuo) if not bit]
-        
+
         return (grupoA, grupoB), min(fitness_final)
 
     def spectral_clustering_bipartition(self, estados_bin, tabla_costos, indices_ncubos):
         """
         Usa clustering espectral basado en la geometría del hipercubo
-        Técnica de agrupamiento, que utiliza la teoría de grafos para identificar grupos de nodos en un grafo, basado en la similitud entre los nodos. Es efectivo para agrupar datos no lineales y suele ser más eficiente que el clustering tradicional, como k-means, en ciertos casos
+        Técnica de agrupamiento, que utiliza la teoría de grafos para identificar   grupos de nodos en un grafo, basado en la similitud entre los nodos. Es   efectivo para agrupar datos no lineales y suele ser más eficiente que el  clustering tradicional, como k-means, en ciertos casos
         """
         try:
             from scipy.linalg import eigh
@@ -203,39 +202,54 @@ class Heuristicas:
         nodos_alcance = list(indices_ncubos)
         n_nodos = len(nodos_alcance)
         
+        # Crear matriz de similaridad basada en distancia Hamming entre los VALORES REALES de los nodos
         W = np.zeros((n_nodos, n_nodos))
         for i in range(n_nodos):
             for j in range(n_nodos):
                 if i != j:
-                    dist_hamming = bin(i ^ j).count('1')
+                    # Usar los valores reales de los nodos
+                    nodo_i = nodos_alcance[i]
+                    nodo_j = nodos_alcance[j]
+                    dist_hamming = bin(nodo_i ^ nodo_j).count('1')
                     W[i, j] = np.exp(-dist_hamming)
         
+        # Calcular matriz de grados
         D = np.sum(W, axis=1)
         D_sqrt_inv = np.diag(1.0 / np.sqrt(np.maximum(D, 1e-10)))
+        
+        # Calcular Laplaciano normalizado
         L = np.diag(D) - W
         L_norm = D_sqrt_inv @ L @ D_sqrt_inv
         
+        # Calcular eigenvalores y eigenvectores
         eigenvals, eigenvecs = eigh(L_norm)
         
+        # Usar el segundo eigenvector (Fiedler vector) para la partición
         if eigenvecs.shape[1] > 1:
             fiedler_vector = eigenvecs[:, 1]
         else:
             fiedler_vector = np.random.randn(n_nodos)
         
-        grupoA = [nodos_alcance[i] for i in range(n_nodos) if fiedler_vector[i] >= 0]
-        grupoB = [nodos_alcance[i] for i in range(n_nodos) if fiedler_vector[i] < 0]
+        # Crear partición más balanceada
+        # Ordenar nodos por el valor del Fiedler vector
+        indices_ordenados = np.argsort(fiedler_vector)
         
-        if not grupoA or not grupoB:
-            mediana = np.median(fiedler_vector)
-            grupoA = [nodos_alcance[i] for i in range(n_nodos) if fiedler_vector[i] >= mediana]
-            grupoB = [nodos_alcance[i] for i in range(n_nodos) if fiedler_vector[i] < mediana]
+        # Calcular el punto de corte para una partición más equilibrada
+        # En lugar de usar 0 como umbral, usamos un percentil que dé mejor balance
+        target_size_A = 1
         
+        # Asignar nodos a los grupos de manera más balanceada
+        grupoA = [nodos_alcance[indices_ordenados[i]] for i in range(target_size_A)]
+        grupoB = [nodos_alcance[indices_ordenados[i]] for i in range(target_size_A,n_nodos)]
+        
+        # Asegurar que ambos grupos tengan al menos un elemento
         if not grupoA:
             grupoA = [grupoB.pop()]
         elif not grupoB:
             grupoB = [grupoA.pop()]
         
-        costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+        # Evaluar el costo de la partición
+        costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos,    indices_ncubos)
         return (grupoA, grupoB), costo
 
     def random_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000):

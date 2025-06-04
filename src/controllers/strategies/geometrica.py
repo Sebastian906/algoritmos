@@ -88,8 +88,8 @@ class GeometricSIA(SIA):
         heuristica = Heuristicas(seed=42)
         heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
         
-        mejor_solucion_heur, mejor_costo_heur = heuristica.simulated_annealing_bipartition(
-            estados_bin, tabla_costos, nodos_alcance, use_corrected_evaluation=True
+        mejor_solucion_heur, mejor_costo_heur = heuristica.spectral_clustering_bipartition(
+            estados_bin, tabla_costos, nodos_alcance
         )
         
         if mejor_solucion_heur:
@@ -98,11 +98,9 @@ class GeometricSIA(SIA):
                 [(1, n) for n in mejor_solucion_heur[0]],  # Grupo A en tiempo futuro
                 [(1, n) for n in mejor_solucion_heur[1]] + [(0, n) for n in nodos_mecanismo]  # Grupo B + mecanismo
             )
-            print(solucion_formateada[0], solucion_formateada[1])
             # Usar la mejor solución entre exhaustiva y heurística
             if mejor_costo_heur < mejor_costo:
                 mejores = solucion_formateada
-                print(f"Heurística encontró mejor solución: costo {mejor_costo_heur} vs {mejor_costo}")
                 mejor_costo = mejor_costo_heur
         else:
             print("No se encontró solución heurística")
