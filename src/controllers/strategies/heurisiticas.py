@@ -189,68 +189,65 @@ class Heuristicas:
 
         return (grupoA, grupoB), min(fitness_final)
 
-    def spectral_clustering_bipartition(self, estados_bin, tabla_costos, indices_ncubos):
+    def spectral_clustering_bipartition(self, estados_bin, tabla_costos, indices_ncubos, dims_ncubos, modo='aislado'):
         """
-        Usa clustering espectral basado en la geometría del hipercubo
-        Técnica de agrupamiento, que utiliza la teoría de grafos para identificar   grupos de nodos en un grafo, basado en la similitud entre los nodos. Es   efectivo para agrupar datos no lineales y suele ser más eficiente que el  clustering tradicional, como k-means, en ciertos casos
+        Clustering espectral para bipartición de nodos basada en la estructura del hipercubo.
+        Permite dos modos:
+            - 'aislado': aísla un único nodo (original).
+            - 'signo': usa el signo del vector de Fiedler para bipartición completa.
         """
         try:
             from scipy.linalg import eigh
         except ImportError:
             from numpy.linalg import eigh
-        
-        nodos_alcance = list(indices_ncubos)
-        n_nodos = len(nodos_alcance)
-        
-        # Crear matriz de similaridad basada en distancia Hamming entre los VALORES REALES de los nodos
+
+        # Construcción de la lista de nodos como tuplas (tipo, índice)
+        presentes = [(0, np.int8(idx)) for idx in dims_ncubos]
+        futuros = [(1, np.int8(idx)) for idx in indices_ncubos]
+        todos_los_nodos = futuros + presentes
+        n_nodos = len(todos_los_nodos)
+
+        # Matriz de afinidad W basada en distancia de Hamming modificada
         W = np.zeros((n_nodos, n_nodos))
         for i in range(n_nodos):
             for j in range(n_nodos):
                 if i != j:
-                    # Usar los valores reales de los nodos
-                    nodo_i = nodos_alcance[i]
-                    nodo_j = nodos_alcance[j]
-                    dist_hamming = bin(nodo_i ^ nodo_j).count('1')
+                    tipo_i, idx_i = todos_los_nodos[i]
+                    tipo_j, idx_j = todos_los_nodos[j]
+                    dist_hamming = abs(tipo_i - tipo_j) + abs(idx_i - idx_j)
                     W[i, j] = np.exp(-dist_hamming)
-        
-        # Calcular matriz de grados
+
+        # Laplaciana normalizada
         D = np.sum(W, axis=1)
         D_sqrt_inv = np.diag(1.0 / np.sqrt(np.maximum(D, 1e-10)))
-        
-        # Calcular Laplaciano normalizado
         L = np.diag(D) - W
         L_norm = D_sqrt_inv @ L @ D_sqrt_inv
-        
-        # Calcular eigenvalores y eigenvectores
+
+        # Descomposición espectral
         eigenvals, eigenvecs = eigh(L_norm)
-        
-        # Usar el segundo eigenvector (Fiedler vector) para la partición
-        if eigenvecs.shape[1] > 1:
-            fiedler_vector = eigenvecs[:, 1]
+        fiedler_vector = eigenvecs[:, 1] if eigenvecs.shape[1] > 1 else np.random.randn(n_nodos)
+        print("Fiedler vector:", fiedler_vector)
+
+        # Asignación de nodos a grupos según el modo elegido
+        if modo == 'aislado':
+            # Ordenar nodos y aislar el primero
+            indices_ordenados = np.argsort(fiedler_vector)
+            grupoA = [todos_los_nodos[indices_ordenados[0]]]
+            grupoB = [todos_los_nodos[i] for i in indices_ordenados[1:]]
+        elif modo == 'signo':
+            grupoA = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val < 0]
+            grupoB = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val >= 0]
+            # En caso de que un grupo quede vacío (raro), usa la mediana como fallback
+            if len(grupoA) == 0 or len(grupoB) == 0:
+                mediana = np.median(fiedler_vector)
+                grupoA = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val < mediana]
+                grupoB = [todos_los_nodos[i] for i in range(n_nodos) if todos_los_nodos[i] not in grupoA]
         else:
-            fiedler_vector = np.random.randn(n_nodos)
-        
-        # Crear partición más balanceada
-        # Ordenar nodos por el valor del Fiedler vector
-        indices_ordenados = np.argsort(fiedler_vector)
-        
-        # Calcular el punto de corte para una partición más equilibrada
-        # En lugar de usar 0 como umbral, usamos un percentil que dé mejor balance
-        target_size_A = 1
-        
-        # Asignar nodos a los grupos de manera más balanceada
-        grupoA = [nodos_alcance[indices_ordenados[i]] for i in range(target_size_A)]
-        grupoB = [nodos_alcance[indices_ordenados[i]] for i in range(target_size_A,n_nodos)]
-        
-        # Asegurar que ambos grupos tengan al menos un elemento
-        if not grupoA:
-            grupoA = [grupoB.pop()]
-        elif not grupoB:
-            grupoB = [grupoA.pop()]
-        
-        # Evaluar el costo de la partición
-        costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos,    indices_ncubos)
-        return (grupoA, grupoB), costo
+            raise ValueError("Modo no reconocido. Usa 'aislado' o 'signo'.")
+        # Evaluación del costo usando la función corregida
+        costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos)
+        return (grupoA, grupoB), costo 
+
 
     def random_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000):
         """
@@ -270,47 +267,69 @@ class Heuristicas:
             if costo < mejor_costo:
                 mejor_costo = costo
                 mejor_solucion = (grupoA, grupoB)
+            print(mejor_costo)
         
         return mejor_solucion, mejor_costo
 
     # Funciones auxiliares
-    def _evaluar_biparticion_corregida(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos):
-        """Evalúa el costo de una bipartición específica"""
+    def _evaluar_biparticion_corregida(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos):
+        """
+        Evalúa el costo de una bipartición considerando nodos presentes y futuros.
+        grupoA y grupoB: listas de tuplas (tipo, idx), donde tipo=1 es futuro, tipo=0 es presente.
+        """
+        # Compatibilidad con listas de enteros
+        if grupoA and isinstance(grupoA[0], (int, np.integer)):
+            return self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+
+        indices_ncubos_set = set(int(idx) for idx in indices_ncubos)
+
+        # Extraer índices de nodos futuros en cada grupo
+        grupoA_futuros = [int(idx) for tipo, idx in grupoA if tipo == 1 and int(idx) in indices_ncubos_set]
+        grupoB_futuros = [int(idx) for tipo, idx in grupoB if tipo == 1 and int(idx) in indices_ncubos_set]
+
+        # Si ambos grupos no tienen nodos futuros, costo infinito
+        if not grupoA_futuros and not grupoB_futuros:
+            return float("inf")
+
+        # Construir la lista de nodos futuros para el mapeo local
         indices_globales = sorted(list(indices_ncubos))
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
 
-        indicesA = sorted([mapa_global_a_local[n] for n in grupoA if n in mapa_global_a_local])
+        # Indices locales de nodos futuros en grupoA
+        indicesA = sorted([mapa_global_a_local[n] for n in grupoA_futuros if n in mapa_global_a_local])
         num_estados = len(estados_bin)
-        
+
         costo_total = 0.0
         total_variables = 0
-        # contador = 0
-        # costos_por_variable = {}
-        
-        # Evaluar cada variable por separado y tomar el mínimo
+
         for v in sorted(tabla_costos.keys()):
             tabla = tabla_costos[v]
             costo_variable = 0.0
             contador_variable = 0
-            
+
             for i in range(num_estados):
                 for j in range(num_estados):
-                    # Verificar si los estados difieren en los índices del grupo A
-                    if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
+                    # Si grupoA tiene futuros, evalúa sobre ellos
+                    # Si grupoA no tiene futuros (solo presentes), no hay restricción, pero igual se evalúa el costo
+                    if indicesA:
+                        if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
+                            costo_variable += tabla[i][j]
+                            contador_variable += 1
+                    else:
+                        # Si grupoA no tiene futuros, evalúa el costo sobre todos los estados (sin restricción)
                         costo_variable += tabla[i][j]
                         contador_variable += 1
-            
+
             if contador_variable > 0:
                 costo_total += costo_variable / contador_variable
                 total_variables += 1
-        
-        # Promedio de costos de todas las variables
+
         if total_variables > 0:
             return costo_total / total_variables
         else:
             return float("inf")
         
-    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos):
+    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos=None):
         """Evaluación original que toma el mínimo costo entre variables"""
         indices_globales = sorted(list(indices_ncubos))
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
