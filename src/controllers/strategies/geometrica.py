@@ -89,23 +89,23 @@ class GeometricSIA(SIA):
         heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
         
         mejor_solucion_heur, mejor_costo_heur = heuristica.spectral_clustering_bipartition(
-            estados_bin, tabla_costos, nodos_alcance
+            estados_bin, tabla_costos, nodos_alcance, nodos_mecanismo
         )
         
         if mejor_solucion_heur:
             # Convertir la solución heurística al formato esperado (tiempo, nodo)
             solucion_formateada = (
-                [(1, n) for n in mejor_solucion_heur[0]],  # Grupo A en tiempo futuro
-                [(1, n) for n in mejor_solucion_heur[1]] + [(0, n) for n in nodos_mecanismo]  # Grupo B + mecanismo
+                [(n) for n in mejor_solucion_heur[0]],  # Grupo A en tiempo futuro
+                [(n) for n in mejor_solucion_heur[1]]  # Grupo B + mecanismo
             )
             # Usar la mejor solución entre exhaustiva y heurística
+            mejores = solucion_formateada
             if mejor_costo_heur < mejor_costo:
-                mejores = solucion_formateada
                 mejor_costo = mejor_costo_heur
         else:
             print("No se encontró solución heurística")
-
         # Formatear la mejor solución encontrada
+        print(f"Mejor solución heurística: {mejores}")
         if mejores:
             fmt_mip = fmt_biparte_q(mejores[0], mejores[1])
         else:
