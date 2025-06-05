@@ -245,7 +245,7 @@ class Heuristicas:
         else:
             raise ValueError("Modo no reconocido. Usa 'aislado' o 'signo'.")
         # Evaluación del costo usando la función corregida
-        costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos)
+        costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos)
         return (grupoA, grupoB), costo 
 
 
