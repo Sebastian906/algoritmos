@@ -79,14 +79,13 @@ class GeometricSIA(SIA):
             args_list.append((estados_bin, v, val_estado))
         tabla_costos = {}
         with multiprocessing.Pool(processes=min(4, multiprocessing.cpu_count())) as pool:
-            resultados = pool.map(calcular_tabla_costos_worker, args_list)
+            resultados = pool.map(calcular_tabla_costos_worker, args_list, chunksize=1)
         tabla_costos = dict(resultados)
         
         mejores = None
         mejor_costo = float("inf")
-        
-        heuristica = Heuristicas(seed=42)
-        heuristica.set_sia_context(self.sia_subsistema, mapa_global_a_local)
+        seed=42
+        heuristica = Heuristicas(seed, tabla_costos,self.sia_subsistema, mapa_global_a_local)
         
         mejor_solucion_heur, mejor_costo_heur = heuristica.spectral_clustering_bipartition(
             estados_bin, tabla_costos, nodos_alcance, nodos_mecanismo
@@ -105,7 +104,6 @@ class GeometricSIA(SIA):
         else:
             print("No se encontró solución heurística")
         # Formatear la mejor solución encontrada
-        print(f"Mejor solución heurística: {mejores}")
         if mejores:
             fmt_mip = fmt_biparte_q(mejores[0], mejores[1])
         else:

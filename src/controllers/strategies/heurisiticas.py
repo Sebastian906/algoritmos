@@ -5,15 +5,11 @@ from collections import deque
 import numpy as np
 
 class Heuristicas:
-    def __init__(self, seed):
-        self.sia_subsistema = None
-        self.mapa_global_a_local = None
-        self.seed = seed
-
-    def set_sia_context(self, sia_subsistema, mapa_global_a_local):
-        """Establece el contexto necesario para los cálculos"""
+    def __init__(self, seed, tabla_costos,sia_subsistema, mapa_global_a_local):
         self.sia_subsistema = sia_subsistema
         self.mapa_global_a_local = mapa_global_a_local
+        self.tabla_costos = tabla_costos
+        self.seed = seed
 
     def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos, use_corrected_evaluation=False):
         """
@@ -225,8 +221,8 @@ class Heuristicas:
 
         # Descomposición espectral
         eigenvals, eigenvecs = eigh(L_norm)
-        fiedler_vector = eigenvecs[:, 1] if eigenvecs.shape[1] > 1 else np.random.randn(n_nodos)
-        print("Fiedler vector:", fiedler_vector)
+        fiedler_vector = eigenvecs[:, 1] if eigenvecs.shape[0] > 1 else np.random.randn(n_nodos)
+        
 
         # Asignación de nodos a grupos según el modo elegido
         if modo == 'aislado':
@@ -245,7 +241,7 @@ class Heuristicas:
         else:
             raise ValueError("Modo no reconocido. Usa 'aislado' o 'signo'.")
         # Evaluación del costo usando la función corregida
-        costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos)
+        costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos)
         return (grupoA, grupoB), costo 
 
 
