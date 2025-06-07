@@ -1,9 +1,6 @@
 import time
 import numpy as np
-from itertools import combinations
-import random
-import math
-from collections import deque, defaultdict
+from collections import deque
 import multiprocessing
 from src.models.base.sia import SIA
 from src.models.core.solution import Solution
@@ -13,7 +10,7 @@ from src.constants.base import TYPE_TAG, NET_LABEL
 from src.middlewares.slogger import SafeLogger
 from src.middlewares.profile import profiler_manager, profile
 from src.controllers.strategies.heurisiticas import Heuristicas
-
+from itertools import permutations, product
 def calcular_tabla_costos(estados_bin, val_estado):
     """
     Cálculo de la Tabla de Costos T mediante BFS modificado (versión global, sin self)
@@ -56,8 +53,6 @@ def calcular_tabla_costos_worker(args):
 class GeometricSIA(SIA):
     def __init__(self, gestor):
         super().__init__(gestor)
-        random.seed(42)
-        np.random.seed(42)
         profiler_manager.start_session(f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}")
         self.logger = SafeLogger("GEOMETRIC")
 
@@ -88,7 +83,7 @@ class GeometricSIA(SIA):
         heuristica = Heuristicas(seed, tabla_costos,self.sia_subsistema, mapa_global_a_local)
         
         mejor_solucion_heur, mejor_costo_heur = heuristica.spectral_clustering_bipartition(
-            estados_bin, tabla_costos, nodos_alcance, nodos_mecanismo
+            estados_bin, nodos_alcance, nodos_mecanismo
         )
         
         if mejor_solucion_heur:
@@ -103,6 +98,7 @@ class GeometricSIA(SIA):
                 mejor_costo = mejor_costo_heur
         else:
             print("No se encontró solución heurística")
+        print(f"Mejor solución heurística:{mejores[0]} vs {mejores[1]}")
         # Formatear la mejor solución encontrada
         if mejores:
             fmt_mip = fmt_biparte_q(mejores[0], mejores[1])
@@ -122,6 +118,79 @@ class GeometricSIA(SIA):
             return self.sia_subsistema.ncubos[v_idx].data.flat[idx]
         except (IndexError, AttributeError):
             return 0.0
-    
+    def _tensor_slice(self, v_idx, estado):
+        """
+        Aplica un slice al tensor de probabilidad condicional de la variable v_idx
+        para obtener P(X=0 | estado) y P(X=1 | estado).
+        """
+        tensor = self.sia_subsistema.ncubos[v_idx].data  # forma: (2^n, 2)
+        idx = self._binario_a_entero(estado)
+        prob_0 = tensor[idx, 0]
+        prob_1 = tensor[idx, 1]
+        return prob_0, prob_1
+
     def _binario_a_entero(self, binario):
-        return int("".join(str(b) for b in binario), 2)
+        return int("".join(map(str, binario)), 2)
+
+    def reconstruir_tpm(self):
+        """
+        Reconstruye la TPM completa como producto tensorial de los tensores elementales
+        P(V^{t+1} | V^t) = ⊗_i P(X_i^{t+1} | V^t)
+        Resultado: matriz de tamaño (2^n, 2^n)
+        """
+        tensores = [ncubo.data for ncubo in self.sia_subsistema.ncubos]  # cada uno de forma (2^n, 2)
+        tpm = tensores[0]
+        for t in tensores[1:]:
+            tpm = np.tensordot(tpm, t, axes=0)  # tensorial product
+
+        # reordenar a forma (2^n, 2^n)
+        tpm = tpm.reshape((2**self.sia_subsistema.n_variables, 2**self.sia_subsistema.n_variables))
+        return tpm
+
+    def mostrar_slice_tensor(self, v_idx, condicion_estado):
+        """
+        Muestra un slice del tensor correspondiente a la variable v_idx
+        condicionando en un estado específico del sistema.
+        """
+        prob_0, prob_1 = self._tensor_slice(v_idx, condicion_estado)
+        print(f"P(X_{v_idx}=0 | estado={condicion_estado}) = {prob_0:.4f}")
+        print(f"P(X_{v_idx}=1 | estado={condicion_estado}) = {prob_1:.4f}")
+    
+    def permutaciones_coordenadas(self, n):
+        return list(permutations(range(n)))
+
+    def complementaciones_coordenadas(self, n):
+        return list(product([False, True], repeat=n))
+
+    def aplicar_transformacion(self, estado, permutacion, complemento):
+        estado_permutado = [estado[i] for i in permutacion]
+        estado_transformado = [bit ^ int(comp) for bit, comp in zip(estado_permutado, complemento)]
+        return estado_transformado
+    def obtener_canonica(self, biparticion, n):
+        # Genera todas las transformaciones posibles
+        min_bip = None
+        for perm in self.permutaciones_coordenadas(n):
+            for comp in self.complementaciones_coordenadas(n):
+                bip_transformada = frozenset([
+                    self.aplicar_transformacion(list(b), perm, comp)
+                    for b in biparticion
+                ])
+                if min_bip is None or bip_transformada < min_bip:
+                    min_bip = bip_transformada
+        return min_bip
+    def encontrar_ruta_minima(self, origen, destino, estados_bin):
+        
+        n = len(estados_bin[0])
+        visitado = set()
+        cola = deque([(origen, [origen])])
+        
+        while cola:
+            actual, camino = cola.popleft()
+            if actual == destino:
+                return camino
+            visitado.add(tuple(actual))
+            for i in range(n):
+                vecino = actual[:]
+                vecino[i] ^= 1  # cambiar un bit
+                if tuple(vecino) not in visitado:
+                    cola.append((vecino, camino + [vecino]))

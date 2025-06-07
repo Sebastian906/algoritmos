@@ -1,7 +1,7 @@
 import random
 import math
 from collections import deque
-
+from scipy.linalg import eigh
 import numpy as np
 
 class Heuristicas:
@@ -11,7 +11,7 @@ class Heuristicas:
         self.tabla_costos = tabla_costos
         self.seed = seed
 
-    def simulated_annealing_bipartition(self, estados_bin, tabla_costos, indices_ncubos, use_corrected_evaluation=False):
+    def simulated_annealing_bipartition(self, estados_bin, indices_ncubos, use_corrected_evaluation=False):
         """
         Algoritmo metaheurístico de optimización global que se inspira en el proceso de recocido de metalurgia, donde su metal se calienta y luego se enfría lentamente para mejorar su estrcutura cristalina.
         Busca la solución óptima a un problema de optimización de manera probabilistica, explorando el espacio de soluciones y, a medida que la "temperatura" del sistema disminuye, aceptando cada vez menos soluciones que no mejoran la función objetivo
@@ -34,7 +34,7 @@ class Heuristicas:
         grupoB = nodos_alcance[k:]
         
         mejor_solucion = (grupoA, grupoB)
-        mejor_costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos) if use_corrected_evaluation else self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+        mejor_costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, indices_ncubos) if use_corrected_evaluation else self._evaluar_biparticion(grupoA, grupoB, estados_bin, indices_ncubos)
 
         temperatura = 1000
         solucion_actual = mejor_solucion
@@ -48,9 +48,9 @@ class Heuristicas:
             nueva_grupoA, nueva_grupoB = self._generar_vecino_balanceado(solucion_actual)
             
             if use_corrected_evaluation:
-                nuevo_costo = self._evaluar_biparticion_corregida(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
+                nuevo_costo = self._evaluar_biparticion_corregida(nueva_grupoA, nueva_grupoB, estados_bin, indices_ncubos)
             else:
-                nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
+                nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, indices_ncubos)
                 
             # Criterio de aceptación
             delta = nuevo_costo - costo_actual
@@ -67,20 +67,20 @@ class Heuristicas:
         
         return mejor_solucion, mejor_costo
 
-    def simulated_annealing_refinement(self, solucion_inicial, estados_bin, tabla_costos, indices_ncubos, temp_inicial=100, temp_final=0.01, alpha=0.9):
+    def simulated_annealing_refinement(self, solucion_inicial, estados_bin, indices_ncubos, temp_inicial=100, temp_final=0.01, alpha=0.9):
         """
         Refinamiento usando simulated annealing desde una solución inicial
         """
         temperatura = temp_inicial
         solucion_actual = solucion_inicial
-        costo_actual = self._evaluar_biparticion(solucion_actual[0], solucion_actual[1], estados_bin, tabla_costos, indices_ncubos)
+        costo_actual = self._evaluar_biparticion(solucion_actual[0], solucion_actual[1], estados_bin, indices_ncubos)
         
         mejor_solucion = solucion_actual
         mejor_costo = costo_actual
         
         while temperatura > temp_final:
             nueva_grupoA, nueva_grupoB = self._generar_vecino(solucion_actual)
-            nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, tabla_costos, indices_ncubos)
+            nuevo_costo = self._evaluar_biparticion(nueva_grupoA, nueva_grupoB, estados_bin, indices_ncubos)
             
             delta = nuevo_costo - costo_actual
             if delta < 0 or random.random() < math.exp(-delta / temperatura):
@@ -95,7 +95,7 @@ class Heuristicas:
         
         return mejor_solucion, mejor_costo
 
-    def tabu_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000, tabu_size=50):
+    def tabu_search_bipartition(self, estados_bin, indices_ncubos, max_iter=1000, tabu_size=50):
         """
         Búsqueda tabú para bipartición óptima
         Método de optimización matemática, perteneciente a la clase de técnicas de búsqueda local. Aumenta el rendimiento del método de búsqueda local mediante el uso de estructuras de memoria: una vez que una potencial solución es determinada, se la marca como "tabú" de modo que el algoritmo no vuelva a visitar esa posible solución
@@ -105,7 +105,7 @@ class Heuristicas:
         # Solución inicial
         solucion_actual = ([nodos_alcance[0]], nodos_alcance[1:])
         mejor_solucion = solucion_actual
-        mejor_costo = self._evaluar_biparticion(*solucion_actual, estados_bin, tabla_costos, indices_ncubos)
+        mejor_costo = self._evaluar_biparticion(*solucion_actual, estados_bin, indices_ncubos)
         
         lista_tabu = deque(maxlen=tabu_size)
         
@@ -117,7 +117,7 @@ class Heuristicas:
             for vecino in vecinos:
                 vecino_key = (tuple(sorted(vecino[0])), tuple(sorted(vecino[1])))
                 if vecino_key not in lista_tabu:
-                    costo = self._evaluar_biparticion(*vecino, estados_bin, tabla_costos, indices_ncubos)
+                    costo = self._evaluar_biparticion(*vecino, estados_bin, indices_ncubos)
                     if costo < mejor_costo_vecino:
                         mejor_vecino = vecino
                         mejor_costo_vecino = costo
@@ -135,7 +135,7 @@ class Heuristicas:
         
         return mejor_solucion, mejor_costo
 
-    def genetic_algorithm_bipartition(self, estados_bin, tabla_costos,  indices_ncubos, pop_size=100, generations=500):
+    def genetic_algorithm_bipartition(self, estados_bin,  indices_ncubos, pop_size=100, generations=500):
         """
         Algoritmo genético para encontrar bipartición óptima
         Técnica de optimización inspirada en la selección natural y evolución   biológica. Se utiliza para encontrar soluciones a problemas complejos, buscando   la mejor solución dentro de una población de posibles soluciones mediante la  modificación iterativa de la población a través de procesos como la selección,   el cruce y la mutación
@@ -158,7 +158,7 @@ class Heuristicas:
             for individuo in poblacion:
                 grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit]
                 grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not    bit]
-                costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin,  tabla_costos, indices_ncubos)
+                costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, indices_ncubos)
                 fitness.append(1.0 / (1.0 + costo))
 
             nueva_poblacion = []
@@ -175,7 +175,7 @@ class Heuristicas:
         for individuo in poblacion:
             grupoA = [nodos_alcance[i] for i, bit in enumerate(individuo) if bit]
             grupoB = [nodos_alcance[i] for i, bit in enumerate(individuo) if not bit]
-            costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin,  tabla_costos, indices_ncubos)
+            costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, indices_ncubos)
             fitness_final.append(costo)
 
         mejor_idx = fitness_final.index(min(fitness_final))
@@ -185,7 +185,7 @@ class Heuristicas:
 
         return (grupoA, grupoB), min(fitness_final)
 
-    def spectral_clustering_bipartition(self, estados_bin, tabla_costos, indices_ncubos, dims_ncubos, modo='aislado'):
+    def spectral_clustering_bipartition(self, estados_bin, indices_ncubos, dims_ncubos, modo='aislado'):
         """
         Clustering espectral para bipartición de nodos basada en la estructura del hipercubo.
         Permite dos modos:
@@ -241,11 +241,11 @@ class Heuristicas:
         else:
             raise ValueError("Modo no reconocido. Usa 'aislado' o 'signo'.")
         # Evaluación del costo usando la función corregida
-        costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos)
+        costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, indices_ncubos, dims_ncubos)
         return (grupoA, grupoB), costo 
 
 
-    def random_search_bipartition(self, estados_bin, tabla_costos, indices_ncubos, max_iter=1000):
+    def random_search_bipartition(self, estados_bin, indices_ncubos, max_iter=1000):
         """
         Búsqueda aleatoria como algoritmo de fallback
         Métodos de optimización numérica qe no requieren el gradiente del problema de optimización, por lo que puede utilizarse en funciones no continuas ni diferenciables. También se conocen como métodos de búsqueda directa, sin derivada o caja negra
@@ -259,7 +259,7 @@ class Heuristicas:
             grupoA = random.sample(nodos_alcance, k)
             grupoB = [n for n in nodos_alcance if n not in grupoA]
             
-            costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
+            costo = self._evaluar_biparticion(grupoA, grupoB, estados_bin, indices_ncubos)
             if costo < mejor_costo:
                 mejor_costo = costo
                 mejor_solucion = (grupoA, grupoB)
@@ -268,15 +268,11 @@ class Heuristicas:
         return mejor_solucion, mejor_costo
 
     # Funciones auxiliares
-    def _evaluar_biparticion_corregida(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos):
+    def _evaluar_biparticion_corregida(self, grupoA, grupoB, estados_bin, indices_ncubos, dims_ncubos):
         """
         Evalúa el costo de una bipartición considerando nodos presentes y futuros.
         grupoA y grupoB: listas de tuplas (tipo, idx), donde tipo=1 es futuro, tipo=0 es presente.
         """
-        # Compatibilidad con listas de enteros
-        if grupoA and isinstance(grupoA[0], (int, np.integer)):
-            return self._evaluar_biparticion(grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos)
-
         indices_ncubos_set = set(int(idx) for idx in indices_ncubos)
 
         # Extraer índices de nodos futuros en cada grupo
@@ -298,8 +294,8 @@ class Heuristicas:
         costo_total = 0.0
         total_variables = 0
 
-        for v in sorted(tabla_costos.keys()):
-            tabla = tabla_costos[v]
+        for v in sorted(self.tabla_costos.keys()):
+            tabla = self.tabla_costos[v]
             costo_variable = 0.0
             contador_variable = 0
 
@@ -324,40 +320,7 @@ class Heuristicas:
             return costo_total / total_variables
         else:
             return float("inf")
-        
-    def _evaluar_biparticion(self, grupoA, grupoB, estados_bin, tabla_costos, indices_ncubos, dims_ncubos=None):
-        """Evaluación original que toma el mínimo costo entre variables"""
-        indices_globales = sorted(list(indices_ncubos))
-        mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales)}
-
-        indicesA = sorted([mapa_global_a_local[n] for n in grupoA if n in mapa_global_a_local])
-        num_estados = len(estados_bin)
-        
-        costos_por_variable = {}
-        
-        # Evaluar cada variable por separado y tomar el mínimo
-        for v in sorted(tabla_costos.keys()):
-            tabla = tabla_costos[v]
-            costo_variable = 0.0
-            contador_variable = 0
-            
-            for i in range(num_estados):
-                for j in range(num_estados):
-                    # Verificar si los estados difieren en los índices del grupo A
-                    if any(estados_bin[i][idx] != estados_bin[j][idx] for idx in indicesA):
-                        costo_variable += tabla[i][j]
-                        contador_variable += 1
-            
-            if contador_variable > 0:
-                costos_por_variable[v] = costo_variable / contador_variable
-            else:
-                costos_por_variable[v] = float("inf")
-        
-        # Retornar el costo mínimo entre todas las variables
-        if costos_por_variable:
-            return min(costos_por_variable.values())
-        else:
-            return float("inf")
+    
 
     def _generar_vecino_balanceado(self, solucion):
         """
@@ -511,14 +474,3 @@ class Heuristicas:
                 T[i][j] *= gamma
 
         return T
-
-    def _valor_estado_variable(self, idx, v_idx):
-        """Obtiene el valor de una variable en un estado específico"""
-        try:
-            return self.sia_subsistema.ncubos[v_idx].data.flat[idx]
-        except (IndexError, AttributeError):
-            return 0.0
-
-    def _distancia_hamming(self, v, u):
-        """Calcula la distancia de Hamming entre dos vectores binarios"""
-        return sum(b1 != b2 for b1, b2 in zip(v, u))
