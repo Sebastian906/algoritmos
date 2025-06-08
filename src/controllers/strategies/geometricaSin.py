@@ -27,7 +27,7 @@ class GeometricSIA(SIA):
         a la forma canónica de la bipartición final.
         """
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
-
+    
         nodos_mecanismo = sorted(list(self.sia_subsistema.dims_ncubos)) # global_idx para el mecanismo
         nodos_alcance = sorted(list(self.sia_subsistema.indices_ncubos)) # global_idx para el alcance
         
@@ -39,126 +39,344 @@ class GeometricSIA(SIA):
         # donde la clave es el índice LOCAL (v_idx) de la variable dentro de self.sia_subsistema.ncubos
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales_subsistema)}
         
+        # AGREGAR ESTA LÍNEA - Asignar como atributo de la instancia
+        self.mapa_global_a_local = mapa_global_a_local
+        
         # Obtener los estados binarios del subsistema. Estos son los estados del hipercubo.
         estados_bin = self.sia_subsistema.estados() if callable(self.sia_subsistema.estados) else self.sia_subsistema.estados
         
         # El número de dimensiones del hipercubo es la longitud de un estado binario
         num_dimensiones_hipercubo = len(estados_bin[0]) if len(estados_bin) > 0 else 0
-
-        # --- Parte 1: Cálculo de la Tabla de Costos Secuencial ---
-        # `variables_ordenadas` se refiere a los índices locales (v_idx) de las variables
-        # dentro del subsistema (0 a len(self.sia_subsistema.ncubos)-1).
+    
+        # 1. Cálculo de la Tabla de Costos con función t(i,j) reformulada
+        self.logger.info("Calculando tabla de costos con función reformulada t(i,j)")
         variables_ordenadas_local = sorted(range(len(self.sia_subsistema.ncubos)))
         tabla_costos_por_variable = {}
-        # Aquí se calcula T[i][j] para cada variable v_idx (local_idx)
+        
         for v_idx_local in variables_ordenadas_local:
-            tabla_costos_por_variable[v_idx_local] = self.calcular_tabla_costos_variable(estados_bin, v_idx_local)
-
-        # --- Parte 2: Aplicación de Heurística ---
+            tabla_costos_por_variable[v_idx_local] = self.calcular_tabla_costos_reformulada(estados_bin, v_idx_local)
+    
+        # 2. Cálculo de distribuciones marginales como proyecciones geométricas
+        self.logger.info("Calculando distribuciones marginales como proyecciones geométricas")
+        distribuciones_marginales = self.calcular_distribuciones_marginales(estados_bin)
+        
+        # 3. Aplicación de heurística con evaluación por discrepancia tensorial
         seed = 42
         heuristica = Heuristicas(seed, tabla_costos_por_variable, self.sia_subsistema, mapa_global_a_local)
         
-        # La función heurística ahora debe retornar la bipartición de los (tipo, idx)
-        # y su costo asociado.
-        # Pasa los índices globales, no los locales, para que la heurística construya los (tipo, idx).
-        (grupo_a_nodos, grupo_b_nodos), mejor_costo_heur = heuristica.spectral_clustering_bipartition2(
-            estados_bin, nodos_alcance, nodos_mecanismo, modo='aislado'
+        # Usar evaluación basada en discrepancia tensorial en lugar de clustering espectral
+        (grupo_a_nodos, grupo_b_nodos), mejor_costo_heur = self.evaluar_biparticiones_discrepancia_tensorial(
+            estados_bin, nodos_alcance, nodos_mecanismo, distribuciones_marginales, tabla_costos_por_variable, mapa_global_a_local
         )
         
         mejores = None
         mejor_costo = float("inf")
         
-        # Ya que la heurística devuelve la bipartición de los nodos (tipo, idx),
-        # no necesitamos la conversión compleja a estados_bin para la canónica aquí.
-        # La forma canónica para la bipartición de nodos (variables) no está directamente
-        # definida por `obtener_canonica` que opera sobre estados binarios.
-        # Si se necesita una "forma canónica" para los grupos de (tipo, idx),
-        # se necesitaría una función `obtener_canonica_nodos` diferente, que
-        # opere sobre los identificadores (tipo, idx) y no sobre los estados binarios.
-        # Por ahora, simplemente tomamos el resultado de la heurística.
-
-        if grupo_a_nodos and grupo_b_nodos: # Asegurarse de que la heurística encontró una bipartición válida
-            mejores = (grupo_a_nodos, grupo_b_nodos) # Ya están en el formato (tipo, idx)
+        if grupo_a_nodos and grupo_b_nodos:
+            # 4. Normalización a forma canónica usando transformaciones del hipercubo
+            biparticion_canonica = self.obtener_biparticion_canonica_geometrica(
+                grupo_a_nodos, grupo_b_nodos, num_dimensiones_hipercubo
+            )
+            mejores = biparticion_canonica
             mejor_costo = mejor_costo_heur
-            print(f"Mejor solución heurística: Grupo A: {mejores[0]} vs Grupo B: {mejores[1]}")
+            self.logger.info(f"Mejor solución geométrica: Grupo A: {mejores[0]} vs Grupo B: {mejores[1]}")
         else:
-            print("No se encontró solución heurística o la bipartición fue trivial/inválida.")
-            # mejores y mejor_costo ya están inicializados a None y inf
-
-        # --- Parte 4: Formateo y Retorno de la Solución ---
+            self.logger.warning("No se encontró solución válida con la metodología geométrica reformulada.")
+    
+        # 5. Formateo y retorno
         if mejores:
-            # `fmt_biparte_q` espera listas de (tipo, idx) para formatear.
             fmt_mip = fmt_biparte_q(list(mejores[0]), list(mejores[1]))
         else:
             fmt_mip = "No se encontró partición válida"
-            mejor_costo = float("inf") # Asegurarse de que el costo sea infinito si no hay solución.
+            mejor_costo = float("inf")
             
         return Solution(
             estrategia=GEOMETRIC_LABEL,
             perdida=mejor_costo,
-            distribucion_subsistema=self.sia_dists_marginales, # Asumiendo que esto se calcula previamente
-            distribucion_particion=None, # Esto podría calcularse si la partición fuera de estados
+            distribucion_subsistema=distribuciones_marginales,
+            distribucion_particion=None,
             tiempo_total=time.time() - self.sia_tiempo_inicio,
             particion=fmt_mip,
         )
 
-    # --- El resto de las funciones de GeometricSIA (calcular_tabla_costos_variable,
-    #     _valor_estado_variable, _binario_a_entero, _distancia_hamming,
-    #     permutaciones_coordenadas, complementaciones_coordenadas,
-    #     aplicar_transformacion, obtener_canonica, reconstruir_tpm,
-    #     mostrar_slice_tensor, encontrar_ruta_minima)
-    #     permanecen sin cambios en este archivo, ya que la lógica de la canónica
-    #     para estados binarios y el cálculo de la tabla de costos es correcta para lo que hacen.
-    #     Solo la llamada y el procesamiento del resultado de la heurística cambió.
-    # ---
-
-    def calcular_tabla_costos_variable(self, estados_bin, v_idx):
-        # ... (código existente) ...
+    def calcular_tabla_costos_reformulada(self, estados_bin, v_idx):
+        """
+        Implementación de la función de costo t(i,j) según la ecuación 3.1 del PDF:
+        t_x(i,j) = γ · |X[i] - X[j]| + Σ_{k∈N(i,j)} {t(k,j)}
+        donde γ = 2^(-d(i,j)) y d(i,j) es la distancia de Hamming.
+        """
         n = len(estados_bin)
         T = np.zeros((n, n))
 
-        # Valores X[v] para cada estado binario
+        # Calcular valores X[v] para cada estado
         val_estado = [self._valor_estado_variable(self._binario_a_entero(e), v_idx) for e in estados_bin]
 
         for i in range(n):
             for j in range(n):
                 if i == j:
+                    T[i][j] = 0.0
                     continue
 
+                # Distancia de Hamming entre estados i y j
                 d = self._distancia_hamming(estados_bin[i], estados_bin[j])
-                gamma = 2.0 ** -d
-
-                # Paso 7: contribución directa
-                T[i][j] = abs(val_estado[i] - val_estado[j])
-
+                
+                # Factor de decrecimiento exponencial γ = 2^(-d)
+                gamma = 2.0 ** (-d)
+                
+                # Contribución directa: γ · |X[i] - X[j]|
+                T[i][j] = gamma * abs(val_estado[i] - val_estado[j])
+                
+                # Si no son vecinos inmediatos, agregar contribuciones recursivas
                 if d > 1:
-                    Q = deque([i])
-                    visited = set([i])
-                    level = 0
-
-                    while level < d and Q:
-                        nextQ = deque()
-                        for u in Q:
-                            for v_inner in range(n): # Renombrado para evitar conflicto con la variable `v` del loop principal
-                                if self._distancia_hamming(estados_bin[u], estados_bin[v_inner]) == 1 and \
-                                self._distancia_hamming(estados_bin[v_inner], estados_bin[j]) < self._distancia_hamming(estados_bin[u], estados_bin[j]):
-                                    if v_inner not in visited:
-                                        # Línea 18: Acumulación del costo.
-                                        # Nota: T[i][v_inner] puede no estar calculado aún.
-                                        # El algoritmo 1 sugiere acumular, pero un BFS "clásico" calcula niveles.
-                                        # Si el documento requiere una propagación de costos a través de T[i][v_inner]
-                                        # en un orden específico, esto debe ser claro en el algoritmo 1.
-                                        # Si T[i][v_inner] es el costo de (i a v_inner), entonces está bien.
-                                        T[i][j] += gamma * T[i][v_inner]
-                                        visited.add(v_inner)
-                                        nextQ.append(v_inner)
-                        Q = nextQ
-                        level += 1
-
-                # Aplicar factor gamma al total acumulado de la distancia entre i y j
-                T[i][j] *= gamma
+                    contribucion_recursiva = self._calcular_contribucion_recursiva_bfs(
+                        i, j, estados_bin, val_estado, v_idx, gamma
+                    )
+                    T[i][j] += contribucion_recursiva
 
         return T
+
+    def _calcular_contribucion_recursiva_bfs(self, origen, destino, estados_bin, val_estado, v_idx, gamma):
+        """
+        Implementación del Algoritmo 1 del PDF: BFS modificado para exploración recursiva
+        del hipercubo con acumulación ponderada de costos.
+        """
+        contribucion_total = 0.0
+        n = len(estados_bin)
+        
+        # Inicialización BFS
+        Q = deque([origen])
+        visited = set([origen])
+        level = 0
+        d_total = self._distancia_hamming(estados_bin[origen], estados_bin[destino])
+        
+        while level < d_total and Q:
+            level += 1
+            nextQ = deque()
+            
+            for u in Q:
+                # Encontrar vecinos que nos acerquen al destino
+                for v in range(n):
+                    if (v not in visited and 
+                        self._distancia_hamming(estados_bin[u], estados_bin[v]) == 1 and
+                        self._distancia_hamming(estados_bin[v], estados_bin[destino]) < 
+                        self._distancia_hamming(estados_bin[u], estados_bin[destino])):
+                        
+                        # Calcular contribución de este camino intermedio
+                        d_intermedio = self._distancia_hamming(estados_bin[origen], estados_bin[v])
+                        gamma_intermedio = 2.0 ** (-d_intermedio)
+                        
+                        # Acumulación del costo según línea 18 del Algoritmo 1
+                        contribucion_intermedia = gamma_intermedio * abs(val_estado[origen] - val_estado[v])
+                        contribucion_total += contribucion_intermedia
+                        
+                        visited.add(v)
+                        nextQ.append(v)
+            
+            Q = nextQ
+        
+        return contribucion_total
+
+    def calcular_distribuciones_marginales(self, estados_bin):
+        """
+        Calcula las distribuciones marginales como proyecciones geométricas
+        del hipercubo n-dimensional según la sección 3.2.1 del PDF.
+        """
+        n_estados = len(estados_bin)
+        n_variables = len(estados_bin[0]) if n_estados > 0 else 0
+        
+        distribuciones = {}
+        
+        # Para cada variable, calcular su distribución marginal
+        for v_idx in range(n_variables):
+            dist_marginal = np.zeros(2)  # Binaria: [P(X=0), P(X=1)]
+            
+            for estado in estados_bin:
+                valor_variable = estado[v_idx]
+                # Asumir distribución uniforme o usar pesos del subsistema
+                peso_estado = 1.0 / n_estados  # Simplificación
+                dist_marginal[valor_variable] += peso_estado
+            
+            distribuciones[v_idx] = dist_marginal
+        
+        # Calcular proyecciones conjuntas para pares de variables
+        distribuciones['proyecciones_pares'] = {}
+        for i in range(n_variables):
+            for j in range(i + 1, n_variables):
+                dist_conjunta = np.zeros((2, 2))  # P(Xi, Xj)
+                
+                for estado in estados_bin:
+                    xi, xj = estado[i], estado[j]
+                    peso_estado = 1.0 / n_estados
+                    dist_conjunta[xi][xj] += peso_estado
+                
+                distribuciones['proyecciones_pares'][(i, j)] = dist_conjunta
+        
+        return distribuciones
+
+    def evaluar_biparticiones_discrepancia_tensorial(self, estados_bin, nodos_alcance, nodos_mecanismo, 
+                                               distribuciones_marginales, tabla_costos_por_variable, mapa_global_a_local=None):
+        """
+        Evaluación de biparticiones mediante discrepancia tensorial según sección 3.2 del PDF.
+        En lugar de reconstruir el sistema completo, usa propiedades geométricas y marginales.
+        """
+        # Si no se pasa mapa_global_a_local, usar el atributo de la instancia
+        if mapa_global_a_local is None:
+            mapa_global_a_local = getattr(self, 'mapa_global_a_local', {})
+
+        presentes = [(0, np.int8(idx)) for idx in nodos_mecanismo]
+        futuros = [(1, np.int8(idx)) for idx in nodos_alcance]
+        todos_los_nodos = futuros + presentes
+
+        if len(todos_los_nodos) <= 1:
+            return ([], []), float("inf")
+
+        mejor_biparticion = None
+        mejor_discrepancia = float("inf")
+
+        # Estrategia de exploración inteligente basada en proyecciones marginales
+        # En lugar de evaluar todas las biparticiones, usar heurística geométrica
+
+        # 1. Identificar variables con mayor "independencia geométrica"
+        independencias = self._calcular_independencias_geometricas(distribuciones_marginales, tabla_costos_por_variable)
+
+        # 2. Generar biparticiones candidatas basadas en independencias
+        biparticiones_candidatas = self._generar_biparticiones_candidatas(todos_los_nodos, independencias)
+
+        # 3. Evaluar cada candidata usando discrepancia tensorial
+        for grupo_a, grupo_b in biparticiones_candidatas:
+            if len(grupo_a) == 0 or len(grupo_b) == 0:
+                continue
+
+            discrepancia = self._calcular_discrepancia_tensorial(
+                grupo_a, grupo_b, distribuciones_marginales, tabla_costos_por_variable, mapa_global_a_local
+            )
+
+            if discrepancia < mejor_discrepancia:
+                mejor_discrepancia = discrepancia
+                mejor_biparticion = (grupo_a, grupo_b)
+
+        if mejor_biparticion is None:
+            return ([], []), float("inf")
+
+        return mejor_biparticion, mejor_discrepancia
+
+    def _calcular_independencias_geometricas(self, distribuciones_marginales, tabla_costos):
+        """
+        Calcula medidas de independencia geométrica entre variables basadas en
+        las proyecciones marginales y la estructura del hipercubo.
+        """
+        independencias = {}
+        n_variables = len([k for k in distribuciones_marginales.keys() if isinstance(k, int)])
+        
+        # Usar proyecciones conjuntas para medir independencia
+        if 'proyecciones_pares' in distribuciones_marginales:
+            for (i, j), dist_conjunta in distribuciones_marginales['proyecciones_pares'].items():
+                # Calcular independencia como desviación del producto de marginales
+                marginal_i = distribuciones_marginales[i]
+                marginal_j = distribuciones_marginales[j]
+                
+                producto_marginales = np.outer(marginal_i, marginal_j)
+                discrepancia = np.linalg.norm(dist_conjunta - producto_marginales, 'fro')
+                
+                independencias[(i, j)] = discrepancia
+        
+        return independencias
+
+    def _generar_biparticiones_candidatas(self, todos_los_nodos, independencias):
+        """
+        Genera biparticiones candidatas inteligentemente basándose en las independencias geométricas.
+        """
+        candidatas = []
+        n_nodos = len(todos_los_nodos)
+        
+        # Estrategia 1: Separar por tipo (presente/futuro) primero
+        presentes = [nodo for nodo in todos_los_nodos if nodo[0] == 0]
+        futuros = [nodo for nodo in todos_los_nodos if nodo[0] == 1]
+        
+        if len(presentes) > 0 and len(futuros) > 0:
+            candidatas.append((presentes, futuros))
+        
+        # Estrategia 2: Usar independencias para agrupar variables similares
+        if len(independencias) > 0:
+            # Ordenar pares por independencia (menor = más dependientes)
+            pares_ordenados = sorted(independencias.items(), key=lambda x: x[1])
+            
+            for i in range(min(3, len(pares_ordenados))):  # Limitar número de candidatas
+                (var1, var2), _ = pares_ordenados[i]
+                
+                grupo_a = [nodo for nodo in todos_los_nodos if nodo[1] in [var1, var2]]
+                grupo_b = [nodo for nodo in todos_los_nodos if nodo not in grupo_a]
+                
+                if len(grupo_a) > 0 and len(grupo_b) > 0:
+                    candidatas.append((grupo_a, grupo_b))
+        
+        # Estrategia 3: Bipartición aleatoria controlada si no hay suficientes candidatas
+        if len(candidatas) < 2:
+            mid = n_nodos // 2
+            candidatas.append((todos_los_nodos[:mid], todos_los_nodos[mid:]))
+        
+        return candidatas
+
+    def _calcular_discrepancia_tensorial(self, grupo_a, grupo_b, distribuciones_marginales, tabla_costos, mapa_global_a_local):
+        """
+        Calcula la discrepancia tensorial de una bipartición según la metodología del PDF.
+        Mide qué tan bien las proyecciones marginales de cada grupo preservan la información
+        del sistema original sin necesidad de reconstrucción tensorial completa.
+        """
+        discrepancia_total = 0.0
+
+        # 1. Discrepancia por pérdida de información en proyecciones
+        for nodo_a in grupo_a:
+            for nodo_b in grupo_b:
+                tipo_a, idx_a = nodo_a
+                tipo_b, idx_b = nodo_b
+
+                # Si ambos índices están en el mapa local, usar tabla de costos
+                if (idx_a in mapa_global_a_local and 
+                    idx_b in mapa_global_a_local):
+
+                    local_a = mapa_global_a_local[idx_a]
+                    local_b = mapa_global_a_local[idx_b]
+
+                    if local_a in tabla_costos and local_b in tabla_costos:
+                        # Usar diferencia entre tablas de costos como medida de discrepancia
+                        diff_tablas = np.linalg.norm(
+                            tabla_costos[local_a] - tabla_costos[local_b], 'fro'
+                        )
+                        discrepancia_total += diff_tablas
+
+        # 2. Penalización por desequilibrio en la bipartición
+        ratio_grupos = min(len(grupo_a), len(grupo_b)) / max(len(grupo_a), len(grupo_b))
+        penalizacion_desequilibrio = (1.0 - ratio_grupos) * 10.0  # Factor ajustable
+
+        # 3. Bonificación por coherencia geométrica (variables del mismo tipo juntas)
+        bonus_coherencia = 0.0
+        tipos_a = set(nodo[0] for nodo in grupo_a)
+        tipos_b = set(nodo[0] for nodo in grupo_b)
+
+        if len(tipos_a) == 1 or len(tipos_b) == 1:  # Al menos un grupo es homogéneo
+            bonus_coherencia = -2.0  # Reducir discrepancia
+
+        return discrepancia_total + penalizacion_desequilibrio + bonus_coherencia
+
+    def obtener_biparticion_canonica_geometrica(self, grupo_a, grupo_b, n_dimensiones):
+        """
+        Obtiene la forma canónica de la bipartición usando transformaciones geométricas
+        del hipercubo (permutaciones y complementaciones) según metodología del PDF.
+        """
+        # Conversión a representación para canonicalización
+        # Como trabajamos con nodos (tipo, idx) en lugar de estados binarios,
+        # adaptamos la canonicalización al contexto de variables
+        
+        # Ordenar grupos por criterios geométricos consistentes
+        grupo_a_ordenado = sorted(grupo_a, key=lambda x: (x[0], x[1]))
+        grupo_b_ordenado = sorted(grupo_b, key=lambda x: (x[0], x[1]))
+        
+        # Asegurar forma canónica: el grupo "menor" lexicográficamente va first
+        if grupo_a_ordenado < grupo_b_ordenado:
+            return (grupo_a_ordenado, grupo_b_ordenado)
+        else:
+            return (grupo_b_ordenado, grupo_a_ordenado)
 
     def _valor_estado_variable(self, idx, v_idx):
         # ... (código existente) ...

@@ -5,11 +5,14 @@ from scipy.linalg import eigh
 import numpy as np
 
 class Heuristicas:
-    def __init__(self, seed, tabla_costos,sia_subsistema, mapa_global_a_local):
+    def __init__(self, seed, tabla_costos, sia_subsistema, mapa_global_a_local):
         self.sia_subsistema = sia_subsistema
         self.mapa_global_a_local = mapa_global_a_local
         self.tabla_costos = tabla_costos
         self.seed = seed
+        random.seed(seed)
+        np.random.seed(seed)
+
     def _binario_a_entero(self, binario):
         return int("".join(map(str, binario)), 2)
 
@@ -17,238 +20,401 @@ class Heuristicas:
         return sum(b1 != b2 for b1, b2 in zip(v, u))
 
     def _valor_estado_variable(self, idx, v_idx):
-        # Esta función dependerá de self.sia_subsistema, que ya se pasa en el constructor.
         try:
-            # Asumiendo que sia_subsistema.ncubos es accesible y contiene los datos.
             return self.sia_subsistema.ncubos[v_idx].data.flat[idx]
         except (IndexError, AttributeError):
-            # Podría ser un logger en un entorno real
-            # print(f"Error al acceder al valor del estado para v_idx={v_idx}, idx={idx}")
-            return 0.0 # Valor por defecto si hay un error
-    def _distancia_entre_tablas_costos(self, tabla1_idx_local, tabla2_idx_local):
+            return 0.0
+
+    def _distancia_entre_tablas_costos_reformulada(self, tabla1_idx_local, tabla2_idx_local):
         """
-        Calcula una distancia entre dos tablas de costos (matrices T_v_idx).
-        Se usa la norma de Frobenius de la diferencia.
-        Asume que tabla1_idx_local y tabla2_idx_local son índices locales (v_idx)
-        para acceder a self.tabla_costos.
+        Calcula distancia entre tablas de costos considerando la estructura geométrica
+        del hipercubo y los factores de decrecimiento exponencial γ = 2^(-d).
         """
         if tabla1_idx_local not in self.tabla_costos or tabla2_idx_local not in self.tabla_costos:
-            # Si alguna variable no tiene su tabla de costos, la distancia es "infinita".
-            # Esto puede ocurrir si un 'global_idx' no está en el 'alcance' del subsistema.
             return float('inf')
 
         T1 = self.tabla_costos[tabla1_idx_local]
         T2 = self.tabla_costos[tabla2_idx_local]
         
-        # Asegurarse de que las matrices tienen la misma forma para la resta
         if T1.shape != T2.shape:
-            # Esto no debería pasar si todas las T_v_idx tienen la misma forma (N_estados, N_estados)
-            # Pero es una buena verificación de robustez.
             return float('inf')
-            
-        # Norma de Frobenius de la diferencia
-        return np.linalg.norm(T1 - T2, 'fro')
         
-    def spectral_clustering_bipartition2(self, estados_bin, nodos_alcance, nodos_mecanismo, modo='aislado'):
+        # Distancia ponderada considerando la estructura del hipercubo
+        # Las diferencias en transiciones cercanas (distancia Hamming pequeña) pesan más
+        distancia_ponderada = 0.0
+        n_estados = T1.shape[0]
+        
+        for i in range(n_estados):
+            for j in range(n_estados):
+                if i != j:
+                    # Calcular peso basado en distancia topológica
+                    # Aproximamos la distancia Hamming usando los índices de estado
+                    peso_geometrico = 2.0 ** (-abs(i - j))  # Factor γ simplificado
+                    diferencia = abs(T1[i, j] - T2[i, j])
+                    distancia_ponderada += peso_geometrico * diferencia
+        
+        return distancia_ponderada
+
+    def clustering_geometrico_biparticion(self, estados_bin, nodos_alcance, nodos_mecanismo, 
+                                        distribuciones_marginales=None, modo='proyecciones'):
         """
-        Clustering espectral para bipartición de nodos (variables tipo/índice).
-        La matriz de afinidad W se construye basándose en la distancia entre las tablas de costos
-        asociadas a las variables de cada nodo.
+        Clustering basado en la metodología geométrica del PDF, usando proyecciones
+        marginales y discrepancia tensorial en lugar de clustering espectral tradicional.
         """
-        # Construcción de la lista de nodos como tuplas (tipo, índice global)
-        # nodos_alcance (alcance, futuro) y dims_ncubos (mecanismo, presente)
         presentes = [(0, np.int8(idx)) for idx in nodos_mecanismo]
         futuros = [(1, np.int8(idx)) for idx in nodos_alcance]
-        todos_los_nodos = futuros + presentes # El orden es importante para la indexación de W
+        todos_los_nodos = futuros + presentes
         n_nodos = len(todos_los_nodos)
 
-        if n_nodos <= 1: # No se puede biparticionar con 0 o 1 nodo
+        if n_nodos <= 1:
             return ([], []), float("inf")
 
-        # --- CONSTRUCCIÓN DE LA MATRIZ DE AFINIDAD W ---
-        W = np.zeros((n_nodos, n_nodos))
+        if modo == 'proyecciones':
+            return self._biparticion_por_proyecciones_marginales(
+                todos_los_nodos, estados_bin, distribuciones_marginales
+            )
+        elif modo == 'discrepancia_tensorial':
+            return self._biparticion_por_discrepancia_minimal(
+                todos_los_nodos, estados_bin
+            )
+        else:
+            # Fallback al método espectral modificado
+            return self._clustering_espectral_geometrico(todos_los_nodos, estados_bin)
+
+    def _biparticion_por_proyecciones_marginales(self, todos_los_nodos, estados_bin, distribuciones_marginales):
+        """
+        Bipartición basada en análisis de proyecciones marginales como se describe
+        en la sección 3.2.1 del PDF.
+        """
+        if distribuciones_marginales is None:
+            return self._clustering_espectral_geometrico(todos_los_nodos, estados_bin)
         
-        # Primero, obtener todas las distancias entre las tablas de costos para normalización
-        all_distances = []
-        for i in range(n_nodos):
-            for j in range(i + 1, n_nodos): # Solo la mitad superior para simetría
-                tipo_i, global_idx_i = todos_los_nodos[i]
-                tipo_j, global_idx_j = todos_los_nodos[j]
+        # Estrategia 1: Separación por independencia geométrica
+        independencias = self._calcular_independencias_desde_marginales(distribuciones_marginales)
+        
+        if len(independencias) > 0:
+            # Encontrar el par de variables más independientes para hacer el corte
+            par_mas_independiente = max(independencias.items(), key=lambda x: x[1])
+            (var1, var2), _ = par_mas_independiente
+            
+            # Formar grupos basados en esta separación
+            grupo_a = []
+            grupo_b = []
+            
+            for nodo in todos_los_nodos:
+                tipo, idx = nodo
+                if idx == var1 or (tipo == 0 and idx in self._get_variables_correlacionadas(var1, independencias)):
+                    grupo_a.append(nodo)
+                elif idx == var2 or (tipo == 1 and idx in self._get_variables_correlacionadas(var2, independencias)):
+                    grupo_b.append(nodo)
+                else:
+                    # Asignar al grupo más pequeño para balance
+                    if len(grupo_a) <= len(grupo_b):
+                        grupo_a.append(nodo)
+                    else:
+                        grupo_b.append(nodo)
+            
+            if len(grupo_a) > 0 and len(grupo_b) > 0:
+                costo = self._evaluar_biparticion_discrepancia_tensorial(grupo_a, grupo_b, estados_bin)
+                return (grupo_a, grupo_b), costo
+        
+        # Fallback: separación por tipo
+        return self._separacion_por_tipo(todos_los_nodos, estados_bin)
 
-                # Mapear global_idx a local_idx (v_idx)
-                # Solo si el global_idx corresponde a una variable en el subsistema para la cual se calculó la tabla de costos
-                if global_idx_i in self.mapa_global_a_local and global_idx_j in self.mapa_global_a_local:
-                    local_idx_i = self.mapa_global_a_local[global_idx_i]
-                    local_idx_j = self.mapa_global_a_local[global_idx_j]
-                    dist = self._distancia_entre_tablas_costos(local_idx_i, local_idx_j)
-                    if dist != float('inf'):
-                        all_distances.append(dist)
-                # Si una variable no tiene una tabla de costos (no está en el subsistema analizado),
-                # se considera que la afinidad es 0 (o la distancia infinita).
+    def _calcular_independencias_desde_marginales(self, distribuciones_marginales):
+        """
+        Calcula medidas de independencia entre variables basándose en las distribuciones marginales.
+        """
+        independencias = {}
+        
+        if 'proyecciones_pares' not in distribuciones_marginales:
+            return independencias
+        
+        for (i, j), dist_conjunta in distribuciones_marginales['proyecciones_pares'].items():
+            # Calcular independencia como desviación del producto de marginales
+            if i in distribuciones_marginales and j in distribuciones_marginales:
+                marginal_i = distribuciones_marginales[i]
+                marginal_j = distribuciones_marginales[j]
+                
+                producto_marginales = np.outer(marginal_i, marginal_j)
+                discrepancia = np.linalg.norm(dist_conjunta - producto_marginales, 'fro')
+                
+                independencias[(i, j)] = discrepancia
+        
+        return independencias
 
-        max_dist = max(all_distances) if all_distances else 1.0 # Evitar división por cero
+    def _get_variables_correlacionadas(self, variable, independencias):
+        """
+        Obtiene variables correlacionadas con la variable dada basándose en independencias.
+        """
+        correlacionadas = set()
+        umbral_correlacion = 0.1  # Ajustable
+        
+        for (var1, var2), independencia in independencias.items():
+            if independencia < umbral_correlacion:  # Baja independencia = alta correlación
+                if var1 == variable:
+                    correlacionadas.add(var2)
+                elif var2 == variable:
+                    correlacionadas.add(var1)
+        
+        return correlacionadas
+
+    def _biparticion_por_discrepancia_minimal(self, todos_los_nodos, estados_bin):
+        """
+        Encuentra la bipartición que minimiza la discrepancia tensorial
+        mediante búsqueda heurística inteligente.
+        """
+        mejor_biparticion = None
+        menor_discrepancia = float('inf')
+        
+        # Generar biparticiones candidatas de forma inteligente
+        candidatas = self._generar_candidatas_inteligentes(todos_los_nodos)
+        
+        for grupo_a, grupo_b in candidatas:
+            if len(grupo_a) == 0 or len(grupo_b) == 0:
+                continue
+                
+            discrepancia = self._evaluar_biparticion_discrepancia_tensorial(
+                grupo_a, grupo_b, estados_bin
+            )
+            
+            if discrepancia < menor_discrepancia:
+                menor_discrepancia = discrepancia
+                mejor_biparticion = (grupo_a, grupo_b)
+        
+        if mejor_biparticion is None:
+            return self._separacion_por_tipo(todos_los_nodos, estados_bin)
+        
+        return mejor_biparticion, menor_discrepancia
+
+    def _generar_candidatas_inteligentes(self, todos_los_nodos):
+        """
+        Genera biparticiones candidatas usando estrategias heurísticas inteligentes.
+        """
+        candidatas = []
+        n_nodos = len(todos_los_nodos)
+        
+        # Estrategia 1: Separación por tipo (presente/futuro)
+        presentes = [nodo for nodo in todos_los_nodos if nodo[0] == 0]
+        futuros = [nodo for nodo in todos_los_nodos if nodo[0] == 1]
+        
+        if len(presentes) > 0 and len(futuros) > 0:
+            candidatas.append((presentes, futuros))
+        
+        # Estrategia 2: Separación por índices pares/impares
+        pares = [nodo for nodo in todos_los_nodos if nodo[1] % 2 == 0]
+        impares = [nodo for nodo in todos_los_nodos if nodo[1] % 2 == 1]
+        
+        if len(pares) > 0 and len(impares) > 0:
+            candidatas.append((pares, impares))
+        
+        # Estrategia 3: Separación basada en similitud de tablas de costos
+        if len(self.tabla_costos) > 1:
+            grupos_similares = self._agrupar_por_similitud_tablas()
+            if len(grupos_similares) >= 2:
+                candidatas.append((grupos_similares[0], grupos_similares[1]))
+        
+        # Estrategia 4: Bipartición aleatoria balanceada
+        nodos_shuffled = todos_los_nodos.copy()
+        random.shuffle(nodos_shuffled)
+        mid = n_nodos // 2
+        candidatas.append((nodos_shuffled[:mid], nodos_shuffled[mid:]))
+        
+        return candidatas
+
+    def _agrupar_por_similitud_tablas(self):
+        """
+        Agrupa nodos basándose en la similitud de sus tablas de costos.
+        """
+        # Calcular matriz de similitud entre todas las tablas
+        indices_locales = list(self.tabla_costos.keys())
+        n_tablas = len(indices_locales)
+        
+        if n_tablas < 2:
+            return []
+        
+        similitudes = np.zeros((n_tablas, n_tablas))
+        
+        for i, idx_i in enumerate(indices_locales):
+            for j, idx_j in enumerate(indices_locales):
+                if i != j:
+                    dist = self._distancia_entre_tablas_costos_reformulada(idx_i, idx_j)
+                    similitudes[i, j] = 1.0 / (1.0 + dist) if dist != float('inf') else 0.0
+        
+        # Clustering simple basado en similitudes
+        visitados = set()
+        grupos = []
+        
+        for i in range(n_tablas):
+            if i not in visitados:
+                grupo_actual = []
+                cola = [i]
+                
+                while cola:
+                    actual = cola.pop(0)
+                    if actual not in visitados:
+                        visitados.add(actual)
+                        grupo_actual.append(actual)
+                        
+                        # Agregar vecinos similares
+                        for j in range(n_tablas):
+                            if j not in visitados and similitudes[actual, j] > 0.5:
+                                cola.append(j)
+                
+                if grupo_actual:
+                    # Convertir índices locales a nodos (tipo, idx_global)
+                    nodos_grupo = []
+                    for idx_local in grupo_actual:
+                        # Buscar el índice global correspondiente
+                        for global_idx, local_idx in self.mapa_global_a_local.items():
+                            if local_idx == indices_locales[idx_local]:
+                                # Determinar tipo basándose en algún criterio (simplificado)
+                                tipo = 0 if global_idx < max(self.mapa_global_a_local.keys()) // 2 else 1
+                                nodos_grupo.append((tipo, global_idx))
+                                break
+                    
+                    if nodos_grupo:
+                        grupos.append(nodos_grupo)
+        
+        return grupos
+
+    def _clustering_espectral_geometrico(self, todos_los_nodos, estados_bin):
+        """
+        Versión modificada del clustering espectral que incorpora la geometría
+        del hipercubo y los factores de decrecimiento exponencial.
+        """
+        n_nodos = len(todos_los_nodos)
+        
+        # Construcción de matriz de afinidad con pesos geométricos
+        W = np.zeros((n_nodos, n_nodos))
         
         for i in range(n_nodos):
             for j in range(n_nodos):
                 if i == j:
-                    W[i, j] = 1.0 # Alta afinidad de un nodo consigo mismo
+                    W[i, j] = 1.0
                     continue
-
+                
                 tipo_i, global_idx_i = todos_los_nodos[i]
                 tipo_j, global_idx_j = todos_los_nodos[j]
                 
-                if global_idx_i in self.mapa_global_a_local and global_idx_j in self.mapa_global_a_local:
+                # Calcular afinidad basada en tablas de costos reformuladas
+                if (global_idx_i in self.mapa_global_a_local and 
+                    global_idx_j in self.mapa_global_a_local):
+                    
                     local_idx_i = self.mapa_global_a_local[global_idx_i]
                     local_idx_j = self.mapa_global_a_local[global_idx_j]
                     
-                    dist_tablas = self._distancia_entre_tablas_costos(local_idx_i, local_idx_j)
+                    dist_tablas = self._distancia_entre_tablas_costos_reformulada(local_idx_i, local_idx_j)
                     
-                    # Añadir una componente de distancia simple entre tipos (futuro/presente)
-                    # y un peso para la distancia de Hamming entre los IDs (si es aplicable, pero mejor usar la distancia de tablas).
-                    # La distancia tipo + índice es la que tenías originalmente.
-                    # Mantendremos la afinidad basada principalmente en las tablas de costos,
-                    # pero puedes ajustar el peso de la "distancia de identificadores" si es deseado.
-                    dist_identificadores = abs(tipo_i - tipo_j) + abs(global_idx_i - global_idx_j) # Puedes ponderar esto
-                    
-                    # Normalizar la distancia de las tablas y combinarla
-                    if dist_tablas != float('inf') and max_dist > 0:
-                        normalized_dist_tablas = dist_tablas / max_dist
-                        # Combinamos las distancias. Esto es una heurística.
-                        # Una suma simple (o promedio) de distancias antes de exp.
-                        # Puedes ajustar los pesos según la importancia de cada componente.
-                        total_dist = normalized_dist_tablas + (dist_identificadores / (max(nodos_alcance + nodos_mecanismo) + 1)) # Normalizar identificadores
-                        W[i, j] = np.exp(-total_dist)
+                    if dist_tablas != float('inf'):
+                        # Factor de decrecimiento exponencial aplicado a la afinidad
+                        distancia_topologica = abs(global_idx_i - global_idx_j)
+                        gamma = 2.0 ** (-distancia_topologica)
+                        
+                        # Afinidad combinando tabla de costos y geometría
+                        afinidad_geometrica = gamma * np.exp(-dist_tablas / (dist_tablas + 1.0))
+                        W[i, j] = afinidad_geometrica
                     else:
-                        W[i, j] = 1e-10 # Afinidad muy baja si no se pudo calcular la distancia entre tablas.
+                        W[i, j] = 1e-10
                 else:
-                    W[i, j] = 1e-10 # Si no hay tablas de costos para los índices, afinidad muy baja
-
-        # Asegurar simetría explícitamente, aunque la construcción ya debería serlo
+                    W[i, j] = 1e-10
+        
+        # Asegurar simetría
         W = (W + W.T) / 2
-
-        # --- Cálculo de la Laplaciana Normalizada ---
+        
+        # Clustering espectral estándar
         D = np.sum(W, axis=1)
         D_sqrt_inv = np.diag(1.0 / np.sqrt(np.maximum(D, 1e-10)))
         L = np.diag(D) - W
         L_norm = D_sqrt_inv @ L @ D_sqrt_inv
-
-        # --- Descomposición espectral ---
+        
         try:
             eigenvals, eigenvecs = eigh(L_norm)
             idx = eigenvals.argsort()
-            eigenvals = eigenvals[idx]
-            eigenvecs = eigenvecs[:, idx]
+            fiedler_vector = eigenvecs[:, idx[1]] if n_nodos > 1 else np.random.randn(n_nodos)
+        except Exception:
+            return self._separacion_por_tipo(todos_los_nodos, estados_bin)
+        
+        # Bipartición basada en el vector de Fiedler
+        mediana = np.median(fiedler_vector)
+        grupo_a = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val < mediana]
+        grupo_b = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val >= mediana]
+        
+        if not grupo_a or not grupo_b:
+            return self._separacion_por_tipo(todos_los_nodos, estados_bin)
+        
+        costo = self._evaluar_biparticion_discrepancia_tensorial(grupo_a, grupo_b, estados_bin)
+        return (grupo_a, grupo_b), costo
 
-            fiedler_vector = eigenvecs[:, 1] if n_nodos > 1 else np.random.randn(n_nodos)
-
-        except Exception as e:
-            print(f"Error durante la descomposición espectral: {e}")
-            return ([], []), float("inf")
-
-        # --- Asignación de nodos a grupos ---
-        grupoA = []
-        grupoB = []
-
-        if modo == 'aislado':
-            if n_nodos == 0:
-                return ([], []), float("inf")
-            # Ordenar nodos por el valor del vector de Fiedler
-            indices_ordenados = np.argsort(fiedler_vector)
-            
-            # Aislar el nodo con el menor valor de Fiedler
-            # `todos_los_nodos[indices_ordenados[0]]` es la tupla (tipo, idx)
-            grupoA = [todos_los_nodos[indices_ordenados[0]]]
-            grupoB = [todos_los_nodos[i] for i in indices_ordenados[1:]]
-            
-            # Asegurar que ambos grupos no estén vacíos. Si solo hay un nodo, grupo B estará vacío.
-            if not grupoA or not grupoB:
-                # Si solo hay un nodo, o si solo hay un grupo, se considera una bipartición trivial o inválida
-                return ([], []), float("inf")
-
-        elif modo == 'signo':
-            for i, val in enumerate(fiedler_vector):
-                if val < 0:
-                    grupoA.append(todos_los_nodos[i])
-                else:
-                    grupoB.append(todos_los_nodos[i])
-            
-            # Asegurar que ambos grupos no estén vacíos
-            if not grupoA or not grupoB:
-                mediana = np.median(fiedler_vector)
-                grupoA = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val < mediana]
-                grupoB = [todos_los_nodos[i] for i, val in enumerate(fiedler_vector) if val >= mediana]
-
-                if not grupoA or not grupoB:
-                    print("Advertencia: No se pudo formar una bipartición no vacía usando el modo 'signo'.")
-                    return ([], []), float("inf")
+    def _separacion_por_tipo(self, todos_los_nodos, estados_bin):
+        """
+        Separación simple por tipo de nodo (presente/futuro).
+        """
+        presentes = [nodo for nodo in todos_los_nodos if nodo[0] == 0]
+        futuros = [nodo for nodo in todos_los_nodos if nodo[0] == 1]
+        
+        if not presentes or not futuros:
+            # Si no hay separación por tipo, hacer división por la mitad
+            mid = len(todos_los_nodos) // 2
+            grupo_a = todos_los_nodos[:mid] if mid > 0 else [todos_los_nodos[0]]
+            grupo_b = todos_los_nodos[mid:] if mid < len(todos_los_nodos) else []
+            if not grupo_b:
+                grupo_b = [todos_los_nodos[-1]]
+                grupo_a = todos_los_nodos[:-1]
         else:
-            raise ValueError("Modo no reconocido. Usa 'aislado' o 'signo'.")
+            grupo_a = presentes
+            grupo_b = futuros
         
-        # --- Evaluación del costo ---
-        # Ahora _evaluar_biparticion_corregida debe recibir los grupos como tuplas (tipo, idx)
-        # y usar self.tabla_costos para calcular el costo.
-        costo = self._evaluar_biparticion_corregida(grupoA, grupoB, estados_bin, nodos_alcance, nodos_mecanismo)
-        
-        return (grupoA, grupoB), costo
+        costo = self._evaluar_biparticion_discrepancia_tensorial(grupo_a, grupo_b, estados_bin)
+        return (grupo_a, grupo_b), costo
 
-
-    def _evaluar_biparticion_corregida(self, grupoA, grupoB, estados_bin, nodos_alcance, nodos_mecanismo):
+    def _evaluar_biparticion_discrepancia_tensorial(self, grupo_a, grupo_b, estados_bin):
         """
-        Evalúa el costo de una bipartición de nodos (variables tipo/índice).
-        Ahora calcula el costo de "corte" de la bipartición de variables.
+        Evalúa la bipartición usando discrepancia tensorial según la metodología del PDF.
         """
-        costo_total = 0.0
-        # `grupoA` y `grupoB` son listas de tuplas (tipo, global_idx)
+        discrepancia_total = 0.0
         
-        # Para el costo del corte de la bipartición en el contexto de variables (nodos):
-        # Podríamos definir el costo de un corte como la suma de las afinidades (o la suma de costos inversos)
-        # entre nodos que están en grupos diferentes.
-        
-        # Utilizamos la misma lógica de afinidad inversa que en spectral_clustering_bipartition
-        # para que la evaluación del costo sea consistente.
-
-        # Calcular el costo de corte como la suma de las afinidades inversas
-        # (es decir, las distancias/costos entre los nodos cortados).
-        # Esto requiere una nueva matriz de "costo de corte" específica para la evaluación.
-        
-        # Construir una matriz de costos entre nodos (tipo, idx)
-        costo_entre_nodos = np.zeros((len(grupoA) + len(grupoB), len(grupoA) + len(grupoB)))
-        
-        all_nodes_flat = grupoA + grupoB # Para facilitar la indexación si se desea una matriz
-        
-        for i_idx, node_i in enumerate(grupoA):
-            for j_idx, node_j in enumerate(grupoB):
-                tipo_i, global_idx_i = node_i
-                tipo_j, global_idx_j = node_j
+        # 1. Discrepancia por pérdida de información en proyecciones
+        for nodo_a in grupo_a:
+            for nodo_b in grupo_b:
+                tipo_a, idx_a = nodo_a
+                tipo_b, idx_b = nodo_b
                 
-                # Mapear global_idx a local_idx (v_idx)
-                if global_idx_i in self.mapa_global_a_local and global_idx_j in self.mapa_global_a_local:
-                    local_idx_i = self.mapa_global_a_local[global_idx_i]
-                    local_idx_j = self.mapa_global_a_local[global_idx_j]
+                # Si ambos índices están en el mapa local, usar tabla de costos
+                if (idx_a in self.mapa_global_a_local and 
+                    idx_b in self.mapa_global_a_local):
                     
-                    dist_tablas = self._distancia_entre_tablas_costos(local_idx_i, local_idx_j)
+                    local_a = self.mapa_global_a_local[idx_a]
+                    local_b = self.mapa_global_a_local[idx_b]
                     
-                    # Si no se pudo calcular la distancia entre tablas (ej. variable no en subsistema)
-                    # o si es infinito, el costo de corte es alto.
-                    if dist_tablas == float('inf'):
-                        costo_total += 1.0 # Contribución alta al costo
-                    else:
-                        # Si es una distancia (menor es mejor), el costo de corte es la distancia.
-                        # Si la afinidad era exp(-dist), el costo es `dist`.
-                        # Pero el Taller Final habla de "Función de Costo para Transiciones entre Estados".
-                        # Aquí el costo de la bipartición sería la suma de "desafinidades" entre los grupos.
-                        # Usaremos la distancia entre tablas directamente como el "costo" de la conexión.
-                        # Puedes sumar una pequeña componente para la distancia de identificadores si se quiere.
-                        costo_identificadores = abs(tipo_i - tipo_j) + abs(global_idx_i - global_idx_j)
-                        costo_total += dist_tablas + costo_identificadores
-                else:
-                    costo_total += 1.0 # Costo alto si no se pueden evaluar las tablas de costos
+                    if local_a in self.tabla_costos and local_b in self.tabla_costos:
+                        # Usar diferencia entre tablas de costos como medida de discrepancia
+                        diff_tablas = self._distancia_entre_tablas_costos_reformulada(local_a, local_b)
+                        if diff_tablas != float('inf'):
+                            discrepancia_total += diff_tablas
+                        else:
+                            discrepancia_total += 10.0  # Penalización por no poder calcular
+        
+        # 2. Penalización por desequilibrio en la bipartición
+        ratio_grupos = min(len(grupo_a), len(grupo_b)) / max(len(grupo_a), len(grupo_b))
+        penalizacion_desequilibrio = (1.0 - ratio_grupos) * 5.0
+        
+        # 3. Bonificación por coherencia geométrica (variables del mismo tipo juntas)
+        bonus_coherencia = 0.0
+        tipos_a = set(nodo[0] for nodo in grupo_a)
+        tipos_b = set(nodo[0] for nodo in grupo_b)
+        
+        if len(tipos_a) == 1 or len(tipos_b) == 1:  # Al menos un grupo es homogéneo
+            bonus_coherencia = -2.0  # Reducir discrepancia
+        
+        return discrepancia_total + penalizacion_desequilibrio + bonus_coherencia
 
-        # Evitar división por cero si no hay conexiones cortadas
-        if len(grupoA) == 0 or len(grupoB) == 0:
-            return float("inf") # Un grupo vacío no es una bipartición válida
-
-        # Para normalizar el costo, podríamos dividirlo por el número de posibles conexiones cortadas
-        # o por el total de variables.
-        # Una forma simple es el costo total del corte.
-        return costo_total
+    # Método de compatibilidad con la versión anterior
+    def spectral_clustering_bipartition2(self, estados_bin, nodos_alcance, nodos_mecanismo, modo='proyecciones'):
+        """
+        Método de compatibilidad que redirige al nuevo clustering geométrico.
+        """
+        return self.clustering_geometrico_biparticion(
+            estados_bin, nodos_alcance, nodos_mecanismo, 
+            distribuciones_marginales=None, modo=modo
+        )
