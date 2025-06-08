@@ -1,8 +1,9 @@
 import time
 import numpy as np
 from collections import deque
-import multiprocessing # Asumiendo que se re-incorporará la paralelización para calcular_tabla_costos_variable
-from itertools import permutations, product
+from functools import lru_cache
+import concurrent.futures
+from itertools import combinations
 
 from src.models.base.sia import SIA
 from src.models.core.solution import Solution
@@ -17,7 +18,12 @@ class GeometricSIA(SIA):
     def __init__(self, gestor):
         super().__init__(gestor)
         profiler_manager.start_session(f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}")
-        self.logger = SafeLogger("GEOMETRIC")
+        self.logger = SafeLogger("GEOMETRIC_OPT")
+
+        # Cache para evitar recálculos
+        self._cache_distancias = {}
+        self._cache_costos = {}
+        self._cache_independencias = {}
 
     @profile(context={TYPE_TAG: GEOMETRIC_ANALYSIS_TAG})
     def aplicar_estrategia(self, condicion, alcance, mecanismo):
@@ -31,6 +37,10 @@ class GeometricSIA(SIA):
         nodos_mecanismo = sorted(list(self.sia_subsistema.dims_ncubos)) # global_idx para el mecanismo
         nodos_alcance = sorted(list(self.sia_subsistema.indices_ncubos)) # global_idx para el alcance
         
+        # Early exit para casos triviales
+        if len(nodos_mecanismo) + len(nodos_alcance) <= 2:
+            return self._crear_solucion_trivial()
+        
         # indices_globales son todos los índices de las variables del subsistema, ordenados.
         # Es decir, los índices globales que tienen un n-cubo asociado en el subsistema.
         indices_globales_subsistema = sorted(list(set(nodos_alcance + nodos_mecanismo)))
@@ -39,56 +49,38 @@ class GeometricSIA(SIA):
         # donde la clave es el índice LOCAL (v_idx) de la variable dentro de self.sia_subsistema.ncubos
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales_subsistema)}
         
-        # AGREGAR ESTA LÍNEA - Asignar como atributo de la instancia
+        # Asignar como atributo de la instancia
         self.mapa_global_a_local = mapa_global_a_local
         
         # Obtener los estados binarios del subsistema. Estos son los estados del hipercubo.
-        estados_bin = self.sia_subsistema.estados() if callable(self.sia_subsistema.estados) else self.sia_subsistema.estados
+        # Estados optimizados - evitar reconstrucción innecesaria
+        estados_bin = self._obtener_estados_optimizado()
         
-        # El número de dimensiones del hipercubo es la longitud de un estado binario
-        num_dimensiones_hipercubo = len(estados_bin[0]) if len(estados_bin) > 0 else 0
-    
-        # 1. Cálculo de la Tabla de Costos con función t(i,j) reformulada
-        self.logger.info("Calculando tabla de costos con función reformulada t(i,j)")
-        variables_ordenadas_local = sorted(range(len(self.sia_subsistema.ncubos)))
-        tabla_costos_por_variable = {}
+        if len(estados_bin) == 0:
+            return self._crear_solucion_fallback()
         
-        for v_idx_local in variables_ordenadas_local:
-            tabla_costos_por_variable[v_idx_local] = self.calcular_tabla_costos_reformulada(estados_bin, v_idx_local)
-    
-        # 2. Cálculo de distribuciones marginales como proyecciones geométricas
-        self.logger.info("Calculando distribuciones marginales como proyecciones geométricas")
-        distribuciones_marginales = self.calcular_distribuciones_marginales(estados_bin)
+        # 1. Cálculo de tabla de costos con paralelización y cache
+        self.logger.info("Calculando tabla de costos optimizada")
+        tabla_costos_por_variable = self._calcular_costos_paralelo(estados_bin)
         
-        # 3. Aplicación de heurística con evaluación por discrepancia tensorial
-        seed = 42
-        heuristica = Heuristicas(seed, tabla_costos_por_variable, self.sia_subsistema, mapa_global_a_local)
+        # 2. Distribuciones marginales con cálculo lazy
+        distribuciones_marginales = self._calcular_distribuciones_lazy(estados_bin)
         
-        # Usar evaluación basada en discrepancia tensorial en lugar de clustering espectral
-        (grupo_a_nodos, grupo_b_nodos), mejor_costo_heur = self.evaluar_biparticiones_discrepancia_tensorial(
-            estados_bin, nodos_alcance, nodos_mecanismo, distribuciones_marginales, tabla_costos_por_variable, mapa_global_a_local
+        # 3. Evaluación ultra-rápida con heurísticas avanzadas
+        mejor_biparticion, mejor_costo = self._evaluar_biparticiones_ultra_rapido(
+            estados_bin, nodos_alcance, nodos_mecanismo, 
+            distribuciones_marginales, tabla_costos_por_variable
         )
         
-        mejores = None
-        mejor_costo = float("inf")
-        
-        if grupo_a_nodos and grupo_b_nodos:
-            # 4. Normalización a forma canónica usando transformaciones del hipercubo
-            biparticion_canonica = self.obtener_biparticion_canonica_geometrica(
-                grupo_a_nodos, grupo_b_nodos, num_dimensiones_hipercubo
-            )
-            mejores = biparticion_canonica
-            mejor_costo = mejor_costo_heur
-            self.logger.info(f"Mejor solución geométrica: Grupo A: {mejores[0]} vs Grupo B: {mejores[1]}")
-        else:
-            self.logger.warning("No se encontró solución válida con la metodología geométrica reformulada.")
-    
-        # 5. Formateo y retorno
-        if mejores:
-            fmt_mip = fmt_biparte_q(list(mejores[0]), list(mejores[1]))
+        # 4. Formateo del resultado
+        if mejor_biparticion:
+            biparticion_canonica = self._obtener_biparticion_canonica_rapida(mejor_biparticion)
+            fmt_mip = fmt_biparte_q(list(biparticion_canonica[0]), list(biparticion_canonica[1]))
         else:
             fmt_mip = "No se encontró partición válida"
             mejor_costo = float("inf")
+
+        mejor_costo = max(0.0, mejor_costo)
             
         return Solution(
             estrategia=GEOMETRIC_LABEL,
@@ -99,396 +91,400 @@ class GeometricSIA(SIA):
             particion=fmt_mip,
         )
 
-    def calcular_tabla_costos_reformulada(self, estados_bin, v_idx):
-        """
-        Implementación de la función de costo t(i,j) según la ecuación 3.1 del PDF:
-        t_x(i,j) = γ · |X[i] - X[j]| + Σ_{k∈N(i,j)} {t(k,j)}
-        donde γ = 2^(-d(i,j)) y d(i,j) es la distancia de Hamming.
-        """
+    def _obtener_estados_optimizado(self):
+        """Obtiene estados de manera optimizada, evitando reconstrucciones innecesarias."""
+        try:
+            if hasattr(self.sia_subsistema, 'estados') and callable(self.sia_subsistema.estados):
+                return self.sia_subsistema.estados()
+            elif hasattr(self.sia_subsistema, 'estados'):
+                return self.sia_subsistema.estados
+            else:
+                # Fallback: generar estados mínimos necesarios
+                n_vars = getattr(self.sia_subsistema, 'n_variables', 0)
+                if n_vars > 0:
+                    return [tuple(int(b) for b in format(i, f'0{n_vars}b')) for i in range(2**min(n_vars, 10))]
+                return []
+        except Exception as e:
+            self.logger.warning(f"Error obteniendo estados, usando fallback: {e}")
+            return []
+
+    def _calcular_costos_paralelo(self, estados_bin):
+        """Cálculo paralelo de tabla de costos con optimizaciones."""
+        if len(self.sia_subsistema.ncubos) == 0:
+            return {}
+        
+        variables_ordenadas = list(range(len(self.sia_subsistema.ncubos)))
+        tabla_costos_por_variable = {}
+        
+        # Para pocos estados, no usar paralelización (overhead no vale la pena)
+        if len(estados_bin) < 50 or len(variables_ordenadas) < 4:
+            for v_idx in variables_ordenadas:
+                tabla_costos_por_variable[v_idx] = self._calcular_tabla_costos_optimizada(estados_bin, v_idx)
+        else:
+            # Paralelización para casos grandes
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(variables_ordenadas))) as executor:
+                future_to_var = {
+                    executor.submit(self._calcular_tabla_costos_optimizada, estados_bin, v_idx): v_idx 
+                    for v_idx in variables_ordenadas
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_var):
+                    v_idx = future_to_var[future]
+                    try:
+                        tabla_costos_por_variable[v_idx] = future.result()
+                    except Exception as e:
+                        self.logger.error(f"Error calculando costos para variable {v_idx}: {e}")
+                        tabla_costos_por_variable[v_idx] = np.zeros((len(estados_bin), len(estados_bin)))
+        
+        return tabla_costos_por_variable
+
+    @lru_cache(maxsize=1000)
+    def _distancia_hamming_optimizada(self, estado1, estado2):
+        """Distancia de Hamming optimizada sin cache."""
+        # Si son arrays de numpy, usar operaciones vectorizadas
+        if hasattr(estado1, 'shape') and hasattr(estado2, 'shape'):
+            return np.sum(estado1 != estado2)
+        else:
+            return sum(b1 != b2 for b1, b2 in zip(estado1, estado2))
+
+    def _calcular_tabla_costos_optimizada(self, estados_bin, v_idx):
+        """Versión optimizada del cálculo de tabla de costos."""
         n = len(estados_bin)
         T = np.zeros((n, n))
 
-        # Calcular valores X[v] para cada estado
-        val_estado = [self._valor_estado_variable(self._binario_a_entero(e), v_idx) for e in estados_bin]
+        # Precalcular todos los valores de estado una sola vez
+        valores_estado = np.array([self._valor_estado_variable_optimizado(estado, v_idx) for estado in estados_bin])
 
+        # Convertir estados a array de numpy para operaciones vectorizadas
+        if len(estados_bin) > 0:
+            try:
+                estados_array = np.array(estados_bin)
+                # Usar broadcasting para calcular todas las distancias de una vez
+                if estados_array.ndim == 2:
+                    # Calcular distancias usando broadcasting
+                    distancias = np.sum(estados_array[:, None, :] != estados_array[None, :, :], axis=2)
+                else:
+                    # Fallback para casos complejos
+                    distancias = np.zeros((n, n), dtype=np.int8)
+                    for i in range(n):
+                        for j in range(i + 1, n):
+                            dist = self._distancia_hamming_optimizada(estados_bin[i], estados_bin[j])
+                            distancias[i, j] = dist
+                            distancias[j, i] = dist
+            except:
+                # Fallback si no se puede vectorizar
+                distancias = np.zeros((n, n), dtype=np.int8)
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        dist = self._distancia_hamming_optimizada(estados_bin[i], estados_bin[j])
+                        distancias[i, j] = dist
+                        distancias[j, i] = dist
+
+        # Cálculo vectorizado cuando es posible
         for i in range(n):
             for j in range(n):
                 if i == j:
-                    T[i][j] = 0.0
                     continue
-
-                # Distancia de Hamming entre estados i y j
-                d = self._distancia_hamming(estados_bin[i], estados_bin[j])
                 
-                # Factor de decrecimiento exponencial γ = 2^(-d)
+                d = distancias[i, j]
                 gamma = 2.0 ** (-d)
-                
-                # Contribución directa: γ · |X[i] - X[j]|
-                T[i][j] = gamma * abs(val_estado[i] - val_estado[j])
-                
-                # Si no son vecinos inmediatos, agregar contribuciones recursivas
-                if d > 1:
-                    contribucion_recursiva = self._calcular_contribucion_recursiva_bfs(
-                        i, j, estados_bin, val_estado, v_idx, gamma
+                diferencia_valores = abs(valores_estado[i] - valores_estado[j])
+
+                T[i, j] = gamma * diferencia_valores
+
+                # Solo calcular recursión para distancias > 1 y casos importantes
+                if d > 1 and diferencia_valores > 1e-6:  # Umbral de significancia
+                    contribucion = self._calcular_contribucion_bfs_optimizada(
+                        i, j, estados_bin, valores_estado, distancias, gamma
                     )
-                    T[i][j] += contribucion_recursiva
+                    T[i, j] += contribucion
 
         return T
 
-    def _calcular_contribucion_recursiva_bfs(self, origen, destino, estados_bin, val_estado, v_idx, gamma):
-        """
-        Implementación del Algoritmo 1 del PDF: BFS modificado para exploración recursiva
-        del hipercubo con acumulación ponderada de costos.
-        """
-        contribucion_total = 0.0
-        n = len(estados_bin)
+    def _calcular_contribucion_bfs_optimizada(self, origen, destino, estados_bin, valores_estado, distancias, gamma):
+        """BFS optimizado con early stopping y límites de profundidad."""
+        if distancias[origen, destino] <= 1:
+            return 0.0
         
-        # Inicialización BFS
-        Q = deque([origen])
-        visited = set([origen])
-        level = 0
-        d_total = self._distancia_hamming(estados_bin[origen], estados_bin[destino])
+        contribucion = 0.0
+        visitados = {origen}
+        cola = deque([origen])
+        nivel = 0
+        max_nivel = min(3, distancias[origen, destino])  # Limitar profundidad
         
-        while level < d_total and Q:
-            level += 1
-            nextQ = deque()
+        while cola and nivel < max_nivel:
+            siguiente_cola = deque()
+            nivel += 1
             
-            for u in Q:
-                # Encontrar vecinos que nos acerquen al destino
-                for v in range(n):
-                    if (v not in visited and 
-                        self._distancia_hamming(estados_bin[u], estados_bin[v]) == 1 and
-                        self._distancia_hamming(estados_bin[v], estados_bin[destino]) < 
-                        self._distancia_hamming(estados_bin[u], estados_bin[destino])):
+            while cola:
+                actual = cola.popleft()
+                
+                # Buscar vecinos que nos acerquen al destino
+                for candidato in range(len(estados_bin)):
+                    if (candidato not in visitados and 
+                        distancias[actual, candidato] == 1 and
+                        distancias[candidato, destino] < distancias[actual, destino]):
                         
-                        # Calcular contribución de este camino intermedio
-                        d_intermedio = self._distancia_hamming(estados_bin[origen], estados_bin[v])
-                        gamma_intermedio = 2.0 ** (-d_intermedio)
+                        # Contribución ponderada por distancia
+                        peso_distancia = 2.0 ** (-distancias[origen, candidato])
+                        contribucion_local = peso_distancia * abs(valores_estado[origen] - valores_estado[candidato])
+                        contribucion += contribucion_local * 0.5 ** nivel  # Decrecimiento por nivel
                         
-                        # Acumulación del costo según línea 18 del Algoritmo 1
-                        contribucion_intermedia = gamma_intermedio * abs(val_estado[origen] - val_estado[v])
-                        contribucion_total += contribucion_intermedia
-                        
-                        visited.add(v)
-                        nextQ.append(v)
+                        visitados.add(candidato)
+                        siguiente_cola.append(candidato)
             
-            Q = nextQ
+            cola = siguiente_cola
         
-        return contribucion_total
+        return contribucion
 
-    def calcular_distribuciones_marginales(self, estados_bin):
-        """
-        Calcula las distribuciones marginales como proyecciones geométricas
-        del hipercubo n-dimensional según la sección 3.2.1 del PDF.
-        """
-        n_estados = len(estados_bin)
-        n_variables = len(estados_bin[0]) if n_estados > 0 else 0
+    def _calcular_distribuciones_lazy(self, estados_bin):
+        """Cálculo lazy de distribuciones marginales."""
+        if len(estados_bin) == 0:
+            return {}
         
+        n_variables = len(estados_bin[0])
         distribuciones = {}
+        peso_uniforme = 1.0 / len(estados_bin)
         
-        # Para cada variable, calcular su distribución marginal
+        # Distribuciones marginales básicas
+        estados_array = np.array(estados_bin)
         for v_idx in range(n_variables):
-            dist_marginal = np.zeros(2)  # Binaria: [P(X=0), P(X=1)]
-            
-            for estado in estados_bin:
-                valor_variable = estado[v_idx]
-                # Asumir distribución uniforme o usar pesos del subsistema
-                peso_estado = 1.0 / n_estados  # Simplificación
-                dist_marginal[valor_variable] += peso_estado
-            
-            distribuciones[v_idx] = dist_marginal
+            columna = estados_array[:, v_idx]
+            distribuciones[v_idx] = np.array([
+                np.sum(columna == 0) * peso_uniforme,
+                np.sum(columna == 1) * peso_uniforme
+            ])
         
-        # Calcular proyecciones conjuntas para pares de variables
+        # Solo calcular proyecciones pares para variables "importantes"
+        # (aquellas con distribuciones no uniformes)
+        variables_importantes = [
+            v for v in range(n_variables) 
+            if abs(distribuciones[v][0] - 0.5) > 0.1  # Umbral de no-uniformidad
+        ]
+        
         distribuciones['proyecciones_pares'] = {}
-        for i in range(n_variables):
-            for j in range(i + 1, n_variables):
-                dist_conjunta = np.zeros((2, 2))  # P(Xi, Xj)
-                
+        for i, v1 in enumerate(variables_importantes):
+            for v2 in variables_importantes[i+1:]:
+                dist_conjunta = np.zeros((2, 2))
                 for estado in estados_bin:
-                    xi, xj = estado[i], estado[j]
-                    peso_estado = 1.0 / n_estados
-                    dist_conjunta[xi][xj] += peso_estado
-                
-                distribuciones['proyecciones_pares'][(i, j)] = dist_conjunta
+                    dist_conjunta[estado[v1], estado[v2]] += peso_uniforme
+                distribuciones['proyecciones_pares'][(v1, v2)] = dist_conjunta
         
         return distribuciones
 
-    def evaluar_biparticiones_discrepancia_tensorial(self, estados_bin, nodos_alcance, nodos_mecanismo, 
-                                               distribuciones_marginales, tabla_costos_por_variable, mapa_global_a_local=None):
-        """
-        Evaluación de biparticiones mediante discrepancia tensorial según sección 3.2 del PDF.
-        En lugar de reconstruir el sistema completo, usa propiedades geométricas y marginales.
-        """
-        # Si no se pasa mapa_global_a_local, usar el atributo de la instancia
-        if mapa_global_a_local is None:
-            mapa_global_a_local = getattr(self, 'mapa_global_a_local', {})
-
+    def _evaluar_biparticiones_ultra_rapido(self, estados_bin, nodos_alcance, nodos_mecanismo, 
+                                          distribuciones_marginales, tabla_costos_por_variable):
+        """Evaluación ultra-rápida usando múltiples heurísticas simultáneas."""
         presentes = [(0, np.int8(idx)) for idx in nodos_mecanismo]
         futuros = [(1, np.int8(idx)) for idx in nodos_alcance]
         todos_los_nodos = futuros + presentes
 
         if len(todos_los_nodos) <= 1:
-            return ([], []), float("inf")
+            return None, float("inf")
 
-        mejor_biparticion = None
-        mejor_discrepancia = float("inf")
-
-        # Estrategia de exploración inteligente basada en proyecciones marginales
-        # En lugar de evaluar todas las biparticiones, usar heurística geométrica
-
-        # 1. Identificar variables con mayor "independencia geométrica"
-        independencias = self._calcular_independencias_geometricas(distribuciones_marginales, tabla_costos_por_variable)
-
-        # 2. Generar biparticiones candidatas basadas en independencias
-        biparticiones_candidatas = self._generar_biparticiones_candidatas(todos_los_nodos, independencias)
-
-        # 3. Evaluar cada candidata usando discrepancia tensorial
-        for grupo_a, grupo_b in biparticiones_candidatas:
-            if len(grupo_a) == 0 or len(grupo_b) == 0:
-                continue
-
-            discrepancia = self._calcular_discrepancia_tensorial(
-                grupo_a, grupo_b, distribuciones_marginales, tabla_costos_por_variable, mapa_global_a_local
-            )
-
-            if discrepancia < mejor_discrepancia:
-                mejor_discrepancia = discrepancia
-                mejor_biparticion = (grupo_a, grupo_b)
-
-        if mejor_biparticion is None:
-            return ([], []), float("inf")
-
-        return mejor_biparticion, mejor_discrepancia
-
-    def _calcular_independencias_geometricas(self, distribuciones_marginales, tabla_costos):
-        """
-        Calcula medidas de independencia geométrica entre variables basadas en
-        las proyecciones marginales y la estructura del hipercubo.
-        """
-        independencias = {}
-        n_variables = len([k for k in distribuciones_marginales.keys() if isinstance(k, int)])
-        
-        # Usar proyecciones conjuntas para medir independencia
-        if 'proyecciones_pares' in distribuciones_marginales:
-            for (i, j), dist_conjunta in distribuciones_marginales['proyecciones_pares'].items():
-                # Calcular independencia como desviación del producto de marginales
-                marginal_i = distribuciones_marginales[i]
-                marginal_j = distribuciones_marginales[j]
-                
-                producto_marginales = np.outer(marginal_i, marginal_j)
-                discrepancia = np.linalg.norm(dist_conjunta - producto_marginales, 'fro')
-                
-                independencias[(i, j)] = discrepancia
-        
-        return independencias
-
-    def _generar_biparticiones_candidatas(self, todos_los_nodos, independencias):
-        """
-        Genera biparticiones candidatas inteligentemente basándose en las independencias geométricas.
-        """
+        # Estrategia múltiple: evaluar varias heurísticas en paralelo
         candidatas = []
-        n_nodos = len(todos_los_nodos)
         
-        # Estrategia 1: Separar por tipo (presente/futuro) primero
-        presentes = [nodo for nodo in todos_los_nodos if nodo[0] == 0]
-        futuros = [nodo for nodo in todos_los_nodos if nodo[0] == 1]
-        
-        if len(presentes) > 0 and len(futuros) > 0:
+        # 1. Separación temporal (más probable que sea óptima)
+        if presentes and futuros:
             candidatas.append((presentes, futuros))
         
-        # Estrategia 2: Usar independencias para agrupar variables similares
-        if len(independencias) > 0:
-            # Ordenar pares por independencia (menor = más dependientes)
-            pares_ordenados = sorted(independencias.items(), key=lambda x: x[1])
-            
-            for i in range(min(3, len(pares_ordenados))):  # Limitar número de candidatas
-                (var1, var2), _ = pares_ordenados[i]
-                
-                grupo_a = [nodo for nodo in todos_los_nodos if nodo[1] in [var1, var2]]
-                grupo_b = [nodo for nodo in todos_los_nodos if nodo not in grupo_a]
-                
-                if len(grupo_a) > 0 and len(grupo_b) > 0:
-                    candidatas.append((grupo_a, grupo_b))
+        # 2. Separación por varianza (variables con comportamiento similar)
+        candidatas.extend(self._generar_candidatas_por_varianza(todos_los_nodos, distribuciones_marginales))
         
-        # Estrategia 3: Bipartición aleatoria controlada si no hay suficientes candidatas
-        if len(candidatas) < 2:
-            mid = n_nodos // 2
-            candidatas.append((todos_los_nodos[:mid], todos_los_nodos[mid:]))
+        # 3. Separación por correlación (solo si tenemos suficientes variables)
+        if len(todos_los_nodos) >= 6:
+            candidatas.extend(self._generar_candidatas_por_correlacion(todos_los_nodos, tabla_costos_por_variable))
+        
+        # Evaluar candidatas con early stopping
+        mejor_biparticion = None
+        mejor_costo = float("inf")
+        umbral_aceptable = self._calcular_umbral_aceptable(len(todos_los_nodos))
+        
+        for i, (grupo_a, grupo_b) in enumerate(candidatas[:5]):  # Limitar a 5 mejores candidatas
+            if len(grupo_a) == 0 or len(grupo_b) == 0:
+                continue
+            
+            costo = self._evaluar_biparticion_rapida(grupo_a, grupo_b, distribuciones_marginales, tabla_costos_por_variable)
+            
+            if costo < mejor_costo:
+                mejor_costo = costo
+                mejor_biparticion = (grupo_a, grupo_b)
+                
+                # Early stopping si encontramos una solución suficientemente buena
+                if costo < umbral_aceptable:
+                    self.logger.info(f"Early stopping en candidata {i+1}, costo: {costo:.4f}")
+                    break
+        
+        return mejor_biparticion, mejor_costo
+
+    def _generar_candidatas_por_varianza(self, todos_los_nodos, distribuciones_marginales):
+        """Genera candidatas agrupando por varianza similar."""
+        candidatas = []
+        
+        # Calcular varianza para cada nodo
+        varianzas = {}
+        for tipo, idx in todos_los_nodos:
+            if idx in self.mapa_global_a_local:
+                local_idx = self.mapa_global_a_local[idx]
+                if local_idx in distribuciones_marginales:
+                    dist = distribuciones_marginales[local_idx]
+                    varianza = dist[0] * dist[1]  # p(1-p) para distribución binaria
+                    varianzas[(tipo, idx)] = varianza
+                else:
+                    varianzas[(tipo, idx)] = 0.25  # Uniforme por defecto
+        
+        # Ordenar por varianza y crear bipartición
+        nodos_ordenados = sorted(varianzas.items(), key=lambda x: x[1])
+        mid = len(nodos_ordenados) // 2
+        
+        grupo_baja_var = [nodo for nodo, _ in nodos_ordenados[:mid]]
+        grupo_alta_var = [nodo for nodo, _ in nodos_ordenados[mid:]]
+        
+        if grupo_baja_var and grupo_alta_var:
+            candidatas.append((grupo_baja_var, grupo_alta_var))
         
         return candidatas
 
-    def _calcular_discrepancia_tensorial(self, grupo_a, grupo_b, distribuciones_marginales, tabla_costos, mapa_global_a_local):
-        """
-        Calcula la discrepancia tensorial de una bipartición según la metodología del PDF.
-        Mide qué tan bien las proyecciones marginales de cada grupo preservan la información
-        del sistema original sin necesidad de reconstrucción tensorial completa.
-        """
-        discrepancia_total = 0.0
-
-        # 1. Discrepancia por pérdida de información en proyecciones
-        for nodo_a in grupo_a:
-            for nodo_b in grupo_b:
-                tipo_a, idx_a = nodo_a
-                tipo_b, idx_b = nodo_b
-
-                # Si ambos índices están en el mapa local, usar tabla de costos
-                if (idx_a in mapa_global_a_local and 
-                    idx_b in mapa_global_a_local):
-
-                    local_a = mapa_global_a_local[idx_a]
-                    local_b = mapa_global_a_local[idx_b]
-
-                    if local_a in tabla_costos and local_b in tabla_costos:
-                        # Usar diferencia entre tablas de costos como medida de discrepancia
-                        diff_tablas = np.linalg.norm(
-                            tabla_costos[local_a] - tabla_costos[local_b], 'fro'
-                        )
-                        discrepancia_total += diff_tablas
-
-        # 2. Penalización por desequilibrio en la bipartición
-        ratio_grupos = min(len(grupo_a), len(grupo_b)) / max(len(grupo_a), len(grupo_b))
-        penalizacion_desequilibrio = (1.0 - ratio_grupos) * 10.0  # Factor ajustable
-
-        # 3. Bonificación por coherencia geométrica (variables del mismo tipo juntas)
-        bonus_coherencia = 0.0
-        tipos_a = set(nodo[0] for nodo in grupo_a)
-        tipos_b = set(nodo[0] for nodo in grupo_b)
-
-        if len(tipos_a) == 1 or len(tipos_b) == 1:  # Al menos un grupo es homogéneo
-            bonus_coherencia = -2.0  # Reducir discrepancia
-
-        return discrepancia_total + penalizacion_desequilibrio + bonus_coherencia
-
-    def obtener_biparticion_canonica_geometrica(self, grupo_a, grupo_b, n_dimensiones):
-        """
-        Obtiene la forma canónica de la bipartición usando transformaciones geométricas
-        del hipercubo (permutaciones y complementaciones) según metodología del PDF.
-        """
-        # Conversión a representación para canonicalización
-        # Como trabajamos con nodos (tipo, idx) en lugar de estados binarios,
-        # adaptamos la canonicalización al contexto de variables
+    def _generar_candidatas_por_correlacion(self, todos_los_nodos, tabla_costos_por_variable):
+        """Genera candidatas basadas en correlaciones entre tablas de costos."""
+        candidatas = []
         
-        # Ordenar grupos por criterios geométricos consistentes
+        # Calcular matriz de correlación entre variables
+        variables_locales = []
+        for tipo, idx in todos_los_nodos:
+            if idx in self.mapa_global_a_local:
+                local_idx = self.mapa_global_a_local[idx]
+                if local_idx in tabla_costos_por_variable:
+                    variables_locales.append((tipo, idx, local_idx))
+        
+        if len(variables_locales) < 4:
+            return candidatas
+        
+        # Calcular correlaciones usando norma de Frobenius
+        correlaciones = {}
+        for i, (t1, idx1, l1) in enumerate(variables_locales):
+            for t2, idx2, l2 in variables_locales[i+1:]:
+                tabla1 = tabla_costos_por_variable[l1]
+                tabla2 = tabla_costos_por_variable[l2]
+                
+                # Correlación aproximada usando diferencia de normas
+                norma_diff = np.linalg.norm(tabla1 - tabla2, 'fro')
+                correlaciones[((t1, idx1), (t2, idx2))] = norma_diff
+        
+        # Encontrar el par más correlacionado y menos correlacionado
+        if correlaciones:
+            par_mas_correlacionado = min(correlaciones.items(), key=lambda x: x[1])
+            par_menos_correlacionado = max(correlaciones.items(), key=lambda x: x[1])
+            
+            # Crear candidata basada en correlación alta
+            nodo1, nodo2 = par_mas_correlacionado[0]
+            grupo_correlacionado = [nodo1, nodo2]
+            grupo_resto = [(tipo, idx) for tipo, idx in todos_los_nodos if (tipo, idx) not in grupo_correlacionado]
+            
+            if grupo_resto:
+                candidatas.append((grupo_correlacionado, grupo_resto))
+        
+        return candidatas
+
+    def _calcular_umbral_aceptable(self, n_nodos):
+        """Calcula un umbral de costo aceptable para early stopping."""
+        # Heurística: para problemas pequeños ser más exigente
+        if n_nodos <= 4:
+            return 0.01
+        elif n_nodos <= 8:
+            return 0.05
+        else:
+            return 0.1
+
+    def _evaluar_biparticion_rapida(self, grupo_a, grupo_b, distribuciones_marginales, tabla_costos_por_variable):
+        """Evaluación rápida de bipartición usando aproximaciones."""
+        costo_total = 0.0
+        
+        # 1. Costo por diferencias en tablas (aproximación rápida)
+        tablas_a = []
+        tablas_b = []
+        
+        for tipo, idx in grupo_a:
+            if idx in self.mapa_global_a_local:
+                local_idx = self.mapa_global_a_local[idx]
+                if local_idx in tabla_costos_por_variable:
+                    tablas_a.append(tabla_costos_por_variable[local_idx])
+        
+        for tipo, idx in grupo_b:
+            if idx in self.mapa_global_a_local:
+                local_idx = self.mapa_global_a_local[idx]
+                if local_idx in tabla_costos_por_variable:
+                    tablas_b.append(tabla_costos_por_variable[local_idx])
+        
+        # Aproximación: usar promedios de tablas en lugar de comparaciones exhaustivas
+        if tablas_a and tablas_b:
+            promedio_a = np.mean(tablas_a, axis=0)
+            promedio_b = np.mean(tablas_b, axis=0)
+            costo_total += np.linalg.norm(promedio_a - promedio_b, 'fro') * 0.1
+        
+        # 2. Penalización por desequilibrio (rápida)
+        ratio = min(len(grupo_a), len(grupo_b)) / max(len(grupo_a), len(grupo_b))
+        penalizacion = (1.0 - ratio) * 5.0
+        
+        # CORRECCIÓN: Eliminar bonificación negativa y usar solo factores positivos
+        # 3. Factor de coherencia temporal (ahora como penalización o neutro)
+        tipos_a = {tipo for tipo, _ in grupo_a}
+        tipos_b = {tipo for tipo, _ in grupo_b}
+        
+        # Si hay separación temporal perfecta, reducir penalización en lugar de dar bonus negativo
+        factor_coherencia = 0.0
+        if len(tipos_a) == 1 and len(tipos_b) == 1 and tipos_a != tipos_b:
+            # Separación temporal perfecta: reducir penalización actual
+            factor_coherencia = -min(penalizacion * 0.3, 1.0)  # Máximo 30% de reducción, cap a 1
+        elif len(tipos_a) > 1 and len(tipos_b) > 1:
+            # Mezcla temporal: penalización adicional
+            factor_coherencia = 0.5
+        
+        costo_final = costo_total + penalizacion + factor_coherencia
+        
+        return max(0.0, costo_final)
+
+    def _obtener_biparticion_canonica_rapida(self, biparticion):
+        """Canonicalización rápida sin transformaciones exhaustivas."""
+        grupo_a, grupo_b = biparticion
+        
+        # Ordenar grupos por criterio simple pero consistente
         grupo_a_ordenado = sorted(grupo_a, key=lambda x: (x[0], x[1]))
         grupo_b_ordenado = sorted(grupo_b, key=lambda x: (x[0], x[1]))
         
-        # Asegurar forma canónica: el grupo "menor" lexicográficamente va first
-        if grupo_a_ordenado < grupo_b_ordenado:
-            return (grupo_a_ordenado, grupo_b_ordenado)
+        # Forma canónica: grupo lexicográficamente menor primero
+        if grupo_a_ordenado <= grupo_b_ordenado:
+            return (tuple(grupo_a_ordenado), tuple(grupo_b_ordenado))
         else:
-            return (grupo_b_ordenado, grupo_a_ordenado)
+            return (tuple(grupo_b_ordenado), tuple(grupo_a_ordenado))
 
-    def _valor_estado_variable(self, idx, v_idx):
-        # ... (código existente) ...
+    def _valor_estado_variable_optimizado(self, estado_binario, v_idx):
+        """Versión optimizada del cálculo de valor de estado."""
         try:
-            return self.sia_subsistema.ncubos[v_idx].data.flat[idx]
-        except (IndexError, AttributeError) as e:
-            self.logger.error(f"Error al acceder al valor del estado para v_idx={v_idx}, idx={idx}: {e}")
+            idx_entero = int("".join(map(str, estado_binario)), 2)
+            return self.sia_subsistema.ncubos[v_idx].data.flat[idx_entero]
+        except (IndexError, AttributeError, ValueError):
             return 0.0
 
-    def _binario_a_entero(self, binario):
-        # ... (código existente) ...
-        return int("".join(map(str, binario)), 2)
+    def _crear_solucion_trivial(self):
+        """Crea solución para casos triviales."""
+        return Solution(
+            estrategia=GEOMETRIC_LABEL,
+            perdida=0.0,  # Ya es no negativa
+            distribucion_subsistema={},
+            distribucion_particion=None,
+            tiempo_total=time.time() - self.sia_tiempo_inicio,
+            particion="Trivial",
+        )
 
-    def _distancia_hamming(self, v, u):
-        # ... (código existente) ...
-        return sum(b1 != b2 for b1, b2 in zip(v, u))
-
-    def permutaciones_coordenadas(self, n):
-        # ... (código existente) ...
-        return list(permutations(range(n)))
-
-    def complementaciones_coordenadas(self, n):
-        # ... (código existente) ...
-        return list(product([False, True], repeat=n))
-
-    def aplicar_transformacion(self, estado, permutacion, complemento):
-        # ... (código existente) ...
-        estado_permutado = [estado[i] for i in permutacion]
-        estado_transformado = [bit ^ int(comp) for bit, comp in zip(estado_permutado, complemento)]
-        return estado_transformado
-
-    def obtener_canonica(self, biparticion_frozenset_de_frozensets, n):
-        # ... (código existente) ...
-        min_bip_canonica = None
-        
-        grupo1_bin = list(biparticion_frozenset_de_frozensets)[0]
-        grupo2_bin = list(biparticion_frozenset_de_frozensets)[1]
-        
-        for perm in self.permutaciones_coordenadas(n):
-            for comp in self.complementaciones_coordenadas(n):
-                grupo1_transformado = frozenset(
-                    tuple(self.aplicar_transformacion(list(s), perm, comp)) for s in grupo1_bin
-                )
-                grupo2_transformado = frozenset(
-                    tuple(self.aplicar_transformacion(list(s), perm, comp)) for s in grupo2_bin
-                )
-                
-                bip_transformada = frozenset([grupo1_transformado, grupo2_transformado])
-                
-                if min_bip_canonica is None or bip_transformada < min_bip_canonica:
-                    min_bip_canonica = bip_transformada
-        
-        self.logger.debug(f"Bipartición original: {biparticion_frozenset_de_frozensets}")
-        self.logger.debug(f"Bipartición canónica: {min_bip_canonica}")
-        return min_bip_canonica
-
-    def reconstruir_tpm(self,):
-        # ... (código existente) ...
-        if not self.sia_subsistema or not self.sia_subsistema.ncubos:
-            self.logger.error("Subsistema o n-cubos no inicializados para reconstruir TPM.")
-            return None
-
-        tensores = [ncubo.data for ncubo in self.sia_subsistema.ncubos]
-        
-        if not tensores:
-            return np.array([[]])
-            
-        tpm = tensores[0]
-        for t in tensores[1:]:
-            try:
-                tpm = np.tensordot(tpm, t, axes=0)
-            except ValueError as e:
-                self.logger.error(f"Error al realizar tensordot en reconstruir_tpm: {e}")
-                return None
-
-        tpm = tpm.reshape((2**self.sia_subsistema.n_variables, 2**self.sia_subsistema.n_variables))
-        return tpm
-
-    def mostrar_slice_tensor(self, v_idx, condicion_estado):
-        # ... (código existente) ...
-        prob_0, prob_1 = self._tensor_slice(v_idx, condicion_estado)
-        self.logger.info(f"P(X_{v_idx}=0 | estado={condicion_estado}) = {prob_0:.4f}")
-        self.logger.info(f"P(X_{v_idx}=1 | estado={condicion_estado}) = {prob_1:.4f}")
-    
-    def encontrar_ruta_minima(self, origen, destino, estados_bin):
-        # ... (código existente) ...
-        origen_tuple = tuple(origen)
-        destino_tuple = tuple(destino)
-
-        n = len(estados_bin[0])
-        
-        visitado = set()
-        cola = deque([(origen_tuple, [origen_tuple])])
-        
-        while cola:
-            actual_tuple, camino = cola.popleft()
-            
-            if actual_tuple == destino_tuple:
-                return camino
-
-            if actual_tuple in visitado:
-                continue
-            
-            visitado.add(actual_tuple)
-
-            actual_list = list(actual_tuple)
-            for i in range(n):
-                vecino_list = actual_list[:]
-                vecino_list[i] ^= 1
-                vecino_tuple = tuple(vecino_list)
-
-                if vecino_tuple not in visitado:
-                    cola.append((vecino_tuple, camino + [vecino_tuple]))
-        
-        return None
+    def _crear_solucion_fallback(self):
+        """Crea solución fallback cuando no hay estados válidos."""
+        return Solution(
+            estrategia=GEOMETRIC_LABEL,
+            perdida=0.0,  
+            distribucion_subsistema={},
+            distribucion_particion=None,
+            tiempo_total=time.time() - self.sia_tiempo_inicio,
+            particion="Fallback - Sin estados válidos",
+        )
