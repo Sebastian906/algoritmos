@@ -5,7 +5,7 @@ from src.controllers.strategies.geometricaSin import GeometricSIA # Cambio aquí
 from src.controllers.manager import Manager
 
 # Lista de caracteres base
-CARACTERES_BASE = "ABCDE"  # Asegúrate de que coincida con el número de nodos
+CARACTERES_BASE = "ABCDEFGHIJ"  # Asegúrate de que coincida con el número de nodos
 
 def procesar_cadena(cadena):
     try:
@@ -20,7 +20,7 @@ def procesar_cadena(cadena):
         return None, None
 
 def ejecutar_proceso(resultado_queue, condiciones, alcance, mecanismo):
-    estado_inicio = "10000"  # Ajusta a la cantidad de nodos
+    estado_inicio = "1000000000"  # Ajusta a la cantidad de nodos
     config_sistema = Manager(estado_inicial=estado_inicio)
     analizador = GeometricSIA(config_sistema)
     resultado = analizador.aplicar_estrategia(condiciones, alcance, mecanismo)
@@ -46,7 +46,7 @@ def ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo, timeout=7200):
 
     return None
 def iniciar(alcance, mecanismo):
-    condiciones = "11111"  # Ajusta a la cantidad de nodos
+    condiciones = "1111111111"  # Ajusta a la cantidad de nodos
     return ejecutar_con_tiempo_limite(condiciones, alcance, mecanismo)
 
 def leer_columna_excel(ruta_archivo, nombre_columna):
