@@ -35,10 +35,6 @@ class GeometricSIA(SIA):
         nodos_mecanismo = sorted(list(self.sia_subsistema.dims_ncubos))
         nodos_alcance = sorted(list(self.sia_subsistema.indices_ncubos))
         
-        # Early exit para casos triviales
-        if len(nodos_mecanismo) + len(nodos_alcance) <= 2:
-            return self._crear_solucion_trivial()
-        
         indices_globales_subsistema = sorted(list(set(nodos_alcance + nodos_mecanismo)))
         mapa_global_a_local = {global_idx: local_idx for local_idx, global_idx in enumerate(indices_globales_subsistema)}
         self.mapa_global_a_local = mapa_global_a_local 
@@ -587,14 +583,9 @@ class GeometricSIA(SIA):
         n_estados, n_variables_estados = np.array(estados_bin).shape
         n_tensores = len(self.sia_subsistema.ncubos)
 
-        print(f"Validación: {n_estados} estados, {n_variables_estados} variables en estados")
-        print(f"Validación: {n_tensores} tensores disponibles")
-        print(f"Validación: mapa_global_a_local = {self.mapa_global_a_local}")
-
         # Verificar dimensiones de cada tensor
         for v, tensor in enumerate(self.sia_subsistema.ncubos):
             dims_globales = tensor.dims
-            print(f"Tensor {v}: dimensiones globales = {dims_globales}")
 
             # Verificar que todas las dimensiones tienen mapeo válido
             for dim in dims_globales:
@@ -622,16 +613,6 @@ class GeometricSIA(SIA):
         else:
             return (tuple(grupo_b_ordenado), tuple(grupo_a_ordenado))
 
-    def _crear_solucion_trivial(self):
-        """Crea solución para casos triviales."""
-        return Solution(
-            estrategia=GEOMETRIC_LABEL,
-            perdida=0.0,
-            distribucion_subsistema={},
-            distribucion_particion=None,
-            tiempo_total=time.time() - self.sia_tiempo_inicio,
-            particion="Trivial",
-        )
 
 
 # Clase auxiliar para LRU Cache optimizado
